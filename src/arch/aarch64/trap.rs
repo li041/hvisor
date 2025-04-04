@@ -58,7 +58,7 @@ pub mod SmcType {
 
 const PSCI_VERSION_1_1: u64 = 0x10001;
 const PSCI_TOS_NOT_PRESENT_MP: u64 = 2;
-const ARM_SMCCC_VERSION_1_0: u64 = 0x10000;
+const ARM_SMCCC_VERSION_1_1: u64 = 0x10001;
 const ARM_SMCCC_NOT_SUPPORTED: i64 = -1;
 
 extern "C" {
@@ -173,9 +173,8 @@ fn arch_handle_trap_el2(_regs: &mut GeneralRegisters) {
         }
         Some(ESR_EL2::EC::Value::InstrAbortCurrentEL) => {
             println!(
-                "EL2 Exception: Instruction Abort, ELR_EL2: {:#x?}, FAR_EL2: {:#x?}",
-                ELR_EL2.get(),
-                FAR_EL2.get()
+                "EL2 Exception: Instruction Abort, ELR_EL2: {:#x?}, ESR_EL2: {:#x?},FAR_EL2: {:#x?}",
+                elr, esr, far
             );
         }
         _ => {
@@ -416,7 +415,7 @@ fn handle_arch_smc(
     _arg2: u64,
 ) -> u64 {
     match code {
-        SMCccFnId::SMCCC_VERSION => ARM_SMCCC_VERSION_1_0,
+        SMCccFnId::SMCCC_VERSION => ARM_SMCCC_VERSION_1_1,
         SMCccFnId::SMCCC_ARCH_FEATURES => !0,
         _ => {
             error!("unsupported ARM smc service");
