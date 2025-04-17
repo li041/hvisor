@@ -30,13 +30,61 @@ pub const ROOT_ZONE_CPUS: u64 = (1 << 0) | (1 << 1);
 
 pub const ROOT_ZONE_NAME: &str = "root-linux";
 
-pub const ROOT_ZONE_MEMORY_REGIONS: [HvConfigMemoryRegion; 1] = [
+pub const ROOT_ZONE_MEMORY_REGIONS: [HvConfigMemoryRegion; 9] = [
     HvConfigMemoryRegion {
         mem_type: MEM_TYPE_RAM,
-        physical_start: 0x0,
-        virtual_start: 0x0,
-        size: 0x7ffffff000,
-    }
+        physical_start: 0x100000,
+        virtual_start: 0x100000,
+        size: 0xf0000,
+    },
+    HvConfigMemoryRegion {
+        mem_type: MEM_TYPE_RAM,
+        physical_start: 0x200000,
+        virtual_start: 0x200000,
+        size: 0x8200000,
+    },
+    HvConfigMemoryRegion {
+        mem_type: MEM_TYPE_RAM,
+        physical_start: 0x9400000,
+        virtual_start: 0x9400000,
+        size: 0xe6c00000,
+    },
+    HvConfigMemoryRegion {
+        mem_type: MEM_TYPE_RAM,
+        physical_start: 0x100000000,
+        virtual_start: 0x100000000,
+        size: 0x2fc000000,
+    },
+    HvConfigMemoryRegion {
+        mem_type: MEM_TYPE_RAM,
+        physical_start: 0x3fc500000,
+        virtual_start: 0x3fc500000,
+        size: 0x3a00000,
+    },
+    HvConfigMemoryRegion {
+        mem_type: MEM_TYPE_RAM,
+        physical_start: 0x4f0000000,
+        virtual_start: 0x4f0000000,
+        size: 0x10000000,
+    },
+    HvConfigMemoryRegion {
+        mem_type: MEM_TYPE_IO,
+        physical_start: 0xfc000000,
+        virtual_start: 0xfc000000,
+        size: 0x2000000,
+    },
+    HvConfigMemoryRegion {
+        mem_type: MEM_TYPE_IO,
+        physical_start: 0xfe800000,
+        virtual_start: 0xfe800000,
+        size: 0x800000,
+    },
+    HvConfigMemoryRegion {
+        mem_type: MEM_TYPE_IO,
+        physical_start: 0xfe000000,
+        virtual_start: 0xfe000000,
+        size: 0x600000,
+    },
     // HvConfigMemoryRegion {
     //     mem_type: MEM_TYPE_RAM,
     //     physical_start: 0x0000000000200000,
@@ -71,7 +119,7 @@ pub const ROOT_ZONE_MEMORY_REGIONS: [HvConfigMemoryRegion; 1] = [
     //     mem_type: MEM_TYPE_IO,
     //     physical_start: 0xfeb50000,
     //     virtual_start: 0xfeb50000,
-    //     size: 0x1000,
+    //     size: 0x100,
     // }, // uart
     // HvConfigMemoryRegion {
     //     mem_type: MEM_TYPE_IO,
@@ -87,8 +135,11 @@ pub const ROOT_ZONE_MEMORY_REGIONS: [HvConfigMemoryRegion; 1] = [
     // }
 ];
 
-pub const ROOT_ZONE_IRQS: [u32; 1] = [
-    0x76];
+// pub const ROOT_ZONE_IRQS: [u32; 10] = [39, 64, 235, 237, 309, 312, 360, 365, 429, 455];
+pub const ROOT_ZONE_IRQS: [u32; 29] = [
+    39, 41, 42, 43, 45, 46, 64, 120, 121, 235, 237, 247, 248, 250, 251, 252, 265, 266, 309, 312,
+    313, 355, 360, 365, 423, 424, 425, 429, 455,
+];
 
 pub const ROOT_ARCH_ZONE_CONFIG: HvArchZoneConfig = HvArchZoneConfig {
     gicd_base: 0xfe600000,

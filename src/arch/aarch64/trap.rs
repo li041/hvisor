@@ -191,13 +191,17 @@ fn handle_iabt(_regs: &mut GeneralRegisters) {
     let iss = ESR_EL2.read(ESR_EL2::ISS);
     let op = iss >> 6 & 0x1;
     let hpfar = read_sysreg!(HPFAR_EL2);
-    let hdfar = read_sysreg!(FAR_EL2);
-    let mut address = hpfar << 8;
-    address |= hdfar & 0xfff;
-    error!("error ins access {} at {:#x?}!", op, address);
+    let far = read_sysreg!(FAR_EL2);
+    let address = (far & 0xfff) | (hpfar << 8);
+    error!(
+        "error ins access {} at {:#x?}, elr_el2={:#x?}!",
+        op,
+        address,
+        ELR_EL2.get()
+    );
     error!("esr_el2: iss {:#x?}", iss);
     loop {}
-    //TODO finish dabt handle
+    //TODO finish iabt handle
     // arch_skip_instruction(frame);
 }
 fn handle_dabt(regs: &mut GeneralRegisters) {
