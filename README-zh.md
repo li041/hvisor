@@ -1,6 +1,5 @@
 <p align = "center">
 <br><br>
-<img src="https://www.syswonder.org/_media/hvisor-logo.svg">
 <br><br>
 <!-- <img src="https://img.shields.io/badge/hvisor-orange" /> -->
 <img src="https://img.shields.io/github/stars/syswonder/hvisor?color=yellow" />
