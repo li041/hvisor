@@ -34,7 +34,7 @@ pub const ROOT_ZONE_CPUS: u64 = (1 << 0) | (1 << 1);
 
 pub const ROOT_ZONE_NAME: &str = "root-linux";
 
-pub const ROOT_ZONE_MEMORY_REGIONS: [HvConfigMemoryRegion; 9] = [
+pub const ROOT_ZONE_MEMORY_REGIONS: [HvConfigMemoryRegion; 10] = [
     HvConfigMemoryRegion {
         mem_type: MEM_TYPE_RAM,
         physical_start: 0x100000,
@@ -89,6 +89,13 @@ pub const ROOT_ZONE_MEMORY_REGIONS: [HvConfigMemoryRegion; 9] = [
         virtual_start: 0xfe000000,
         size: 0x600000,
     },
+     HvConfigMemoryRegion {
+        mem_type: MEM_TYPE_IO,
+        physical_start: 0xfb000000,
+        virtual_start: 0xfb000000,
+        size: 0x1000000,
+    },//GPU G610
+
     // HvConfigMemoryRegion {
     //     mem_type: MEM_TYPE_RAM,
     //     physical_start: 0x0000000000200000,
@@ -140,8 +147,8 @@ pub const ROOT_ZONE_MEMORY_REGIONS: [HvConfigMemoryRegion; 9] = [
 ];
 
 // pub const ROOT_ZONE_IRQS: [u32; 10] = [39, 64, 235, 237, 309, 312, 360, 365, 429, 455];
-pub const ROOT_ZONE_IRQS: [u32; 32] = [
-    39, 41, 42, 43, 45, 46, 64, 120, 121, 188,235, 237, 247, 248, 250, 251, 252,258,259, 265, 266, 309, 312,
+pub const ROOT_ZONE_IRQS: [u32; 35] = [
+    39, 41, 42, 43, 45, 46, 64, 120, 121,124,125,126, 188,235, 237, 247, 248, 250, 251, 252,258,259, 265, 266, 309, 312,
     313, 355, 360, 365, 423, 424, 425, 429, 455,
 ];
 
