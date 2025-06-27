@@ -1395,7 +1395,7 @@
 		dynamic-power-coefficient = <0xba6>;
 		upthreshold = <0x1e>;
 		downdifferential = <0x0a>;
-		status = "disabled";
+		status = "okay";
 		mali-supply = <0x5a>;
 		mem-supply = <0x5a>;
 		phandle = <0x57>;
