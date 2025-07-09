@@ -87,7 +87,7 @@ pub const ROOT_ZONE_MEMORY_REGIONS: [HvConfigMemoryRegion; 10] = [
         mem_type: MEM_TYPE_IO,
         physical_start: 0xfe000000,
         virtual_start: 0xfe000000,
-        size: 0x600000,
+        size: 0x680000,
     },
      HvConfigMemoryRegion {
         mem_type: MEM_TYPE_IO,
@@ -147,8 +147,8 @@ pub const ROOT_ZONE_MEMORY_REGIONS: [HvConfigMemoryRegion; 10] = [
 ];
 
 // pub const ROOT_ZONE_IRQS: [u32; 10] = [39, 64, 235, 237, 309, 312, 360, 365, 429, 455];
-pub const ROOT_ZONE_IRQS: [u32; 35] = [
-    39, 41, 42, 43, 45, 46, 64, 120, 121,124,125,126, 188,235, 237, 247, 248, 250, 251, 252,258,259, 265, 266, 309, 312,
+pub const ROOT_ZONE_IRQS: [u32; 36] = [
+    39, 41, 42, 43, 45, 46, 64, 120, 121,124,125,126, 188,235, 237, 247, 248, 250, 251, 252,253,258,259, 265, 266, 309, 312,
     313, 355, 360, 365, 423, 424, 425, 429, 455,
 ];
 
