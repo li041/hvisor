@@ -10,7 +10,7 @@ HVISOR_BIN_FULL_PATH = $(shell readlink -f $(hvisor_bin))
 ROOT_LINUX_IMAGE = $(image_dir)/vmlinux
 ROOT_LINUX_IMAGE_BIN = $(ROOT_LINUX_IMAGE).bin
 
-ROOT_LINUX_DTB = $(shell readlink -f $(image_dir)/zone0.dtb)
+ROOT_LINUX_DTB = $(shell readlink -f $(image_dir)/dts/zone0.dtb)
 
 TARGET_FIT_IMAGE = fitImage
 TARGET_FIT_IMAGE_PATH = $(shell readlink -f $(TARGET_FIT_IMAGE))
@@ -23,7 +23,7 @@ HVISOR_TMP_PATH = $(shell readlink -f $(hvisor_bin).tmp)
 GCC_OBJCOPY = aarch64-linux-gnu-objcopy
 .PHONY: dtb
 dtb:
-	#make -C $(image_dir)
+	make -C $(image_dir)/dts
 
 .PHONY: gen-fit
 gen-fit: $(hvisor_bin) dtb
