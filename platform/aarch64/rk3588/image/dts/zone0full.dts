@@ -14265,6 +14265,14 @@ hvisor_virtio_device {
   #clock-cells = <0x00>;
   clock-names = "baudclk", "apb_pclk";
 };
+hvisor_ivc_device {
+                                compatible = "hvisor";
+                                interrupt-parent = <0x01>;
+                                interrupts = <0x00 0x21 0x01>;
+                                /* added dynamically
+                                */
+                        };
+
 
  reserved-memory {
   #address-cells = <2>;
