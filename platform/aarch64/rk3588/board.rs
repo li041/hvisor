@@ -148,7 +148,7 @@ pub const ROOT_ZONE_MEMORY_REGIONS: [HvConfigMemoryRegion; 10] = [
 
 // pub const ROOT_ZONE_IRQS: [u32; 10] = [39, 64, 235, 237, 309, 312, 360, 365, 429, 455];
 pub const ROOT_ZONE_IRQS: [u32; 36] = [
-    39, 41, 42, 43, 45, 46, 64, 120, 121,124,125,126, 188,235, 237, 247, 248, 250, 251, 252,253,258,259, 265, 266, 309, 312,
+    39, 41, 42, 43, 45, 46, 64, 65, 120, 121,124,125,126, 188,235, 237, 247, 248, 250, 251, 252,253,258,259, 265, 266, 309, 312,
     313, 355, 360, 365, 423, 424, 425, 429, 455,
 ];
 
@@ -182,6 +182,18 @@ pub const ROOT_PCI_CONFIG: HvPciConfig = HvPciConfig {
     pci_mem64_base: 0x8000000000,
 };
 
-pub const ROOT_ZONE_IVC_CONFIG: [HvIvcConfig; 0] = [];
+pub const ROOT_ZONE_IVC_CONFIG: [HvIvcConfig; 1] = [
+    HvIvcConfig {
+        ivc_id: 0,
+        peer_id: 0,
+        control_table_ipa: 0xD0000000,
+        shared_mem_ipa: 0xD0001000,
+        rw_sec_size: 0,
+        out_sec_size: 0x1000,
+        interrupt_num: 65,
+        max_peers: 2,
+    }
+];
+
 
 pub const ROOT_PCI_DEVS: [u64; 2] = [0, 1 << 3];
