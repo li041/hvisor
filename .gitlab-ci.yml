@@ -29,3 +29,28 @@ build:
   artifacts:
     paths:
       - ${CI_PROJECT_DIR}/fitImage
+
+trigger_sdk_job:
+  stage: deploy
+  script:
+    - |
+      curl -X POST \
+        -F token=${CI_JOB_TOKEN} \
+        -F ref=main \
+        -F "inputs[job-name]=hyper-build" \
+        -F "inputs[hyper-version]=${CI_COMMIT_REF_SLUG}" \
+        -F "inputs[hyper-need]=[{\"project\": \"${CI_PROJECT_PATH}\", \"job\": \"build\", \"ref\": \"${CI_MERGE_REQUEST_REF_PATH:-${CI_COMMIT_REF_NAME}}\", \"artifacts\": true}]" \
+        -F "inputs[hyper-img-path]=fitImage"  \
+        "${CI_API_V4_URL}/projects/286/trigger/pipeline" || exit 1
+  # trigger:
+  #   project: "rnd/os/rk3588-sdk-patch"
+  #   branch: ci
+  #   inputs:
+  #     job-name: "hyper-build"
+  #     hyper-version: "${CI_COMMIT_REF_SLUG}"
+  #     hyper-need:
+  #       - project: "${CI_PROJECT_PATH}"
+  #         job: "build"
+  #         ref: "${CI_MERGE_REQUEST_REF_PATH:-${CI_COMMIT_REF_NAME}}"
+  #         artifacts: true
+  #     hyper-img-path: "fitImage"
