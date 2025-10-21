@@ -20,6 +20,7 @@ pub mod entry;
 pub mod hypercall;
 pub mod iommu;
 pub mod ipi;
+pub mod llc_coloring;
 pub mod mm;
 pub mod paging;
 pub mod s1pt;

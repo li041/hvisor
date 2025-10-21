@@ -1,3 +1,7 @@
+use buddy_system_allocator::FrameAllocator;
+
+use crate::memory::Frame;
+
 // Copyright (c) 2025 Syswonder
 // hvisor is licensed under Mulan PSL v2.
 // You can use this software according to the terms and conditions of the Mulan PSL v2.
@@ -21,6 +25,7 @@ static EMPTY_PAGE: AlignedPage = AlignedPage::new();
 pub enum Mapper {
     Offset(usize),
     Fixed(usize),
+    Color,
 }
 
 impl Mapper {
@@ -29,13 +34,16 @@ impl Mapper {
         match self {
             Self::Offset(ref off) => *off,
             Self::Fixed(ref _paddr) => 0,
+            Self::Color => 0,
         }
     }
 
+    /// 给定一个虚拟地址, 返回对应映射的物理地址
     pub fn map_fn<VA: Into<usize>>(&self, vaddr: VA) -> PhysAddr {
         match self {
             Self::Offset(ref off) => (vaddr.into()).wrapping_sub(*off),
             Self::Fixed(ref paddr) => *paddr,
+            Self::Color => Frame::new().unwrap().as_ptr() as usize,
         }
     }
 }
@@ -46,7 +54,8 @@ impl<VA: From<usize> + Into<usize> + Copy> MemoryRegion<VA> {
         let paddr = EMPTY_PAGE.as_ptr() as usize;
         Self::new(start, size, flags, Mapper::Fixed(paddr))
     }
-
+    /// [start_vaddr ~ start_vaddr + size) -> [start_paddr ~ size)
+    /// 将连续的虚拟地址区域映射到连续的物理地址区域
     pub fn new_with_offset_mapper(
         start_vaddr: VA,
         start_paddr: PhysAddr,
@@ -63,6 +72,12 @@ impl<VA: From<usize> + Into<usize> + Copy> MemoryRegion<VA> {
             flags,
             Mapper::Offset(phys_virt_offset),
         )
+    }
+    pub fn new_with_color_mapper(start_vaddr: VA, size: usize, flags: MemFlags) -> Self {
+        info!("enter");
+        let start_vaddr = start_vaddr.into();
+        // bug: vaddr > paddr?
+        Self::new(start_vaddr.into(), size, flags, Mapper::Color)
     }
 }
 

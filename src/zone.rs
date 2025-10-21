@@ -17,6 +17,7 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 // use psci::error::INVALID_ADDRESS;
 use crate::consts::{INVALID_ADDRESS, MAX_CPU_NUM};
+use crate::llc_coloring::DEFAULT_COLORS;
 use crate::pci::pci::PciRoot;
 use spin::RwLock;
 
@@ -40,6 +41,8 @@ pub struct Zone {
     pub gpm: MemorySet<Stage2PageTable>,
     pub pciroot: PciRoot,
     pub is_err: bool,
+    #[cfg(feature = "coloring")]
+    pub llc_colors: Vec<usize>,
 }
 
 impl Zone {
@@ -54,6 +57,8 @@ impl Zone {
             irq_bitmap: [0; 1024 / 32],
             pciroot: PciRoot::new(),
             is_err: false,
+            #[cfg(feature = "coloring")]
+            llc_colors: DEFAULT_COLORS.get().unwrap_or(&Vec::new()).clone(),
         }
     }
 

@@ -16,9 +16,11 @@
 use core::panic;
 
 use crate::{
+    arch::llc_coloring,
     config::*,
     device::virtio_trampoline::mmio_virtio_handler,
     error::HvResult,
+    llc_coloring::LLC_COLORING_ENABLED,
     memory::{GuestPhysAddr, HostPhysAddr, MemFlags, MemoryRegion},
     zone::Zone,
 };
@@ -33,14 +35,31 @@ impl Zone {
                 flags |= MemFlags::IO;
             }
             match mem_region.mem_type {
-                MEM_TYPE_RAM | MEM_TYPE_IO => {
-                    self.gpm.insert(MemoryRegion::new_with_offset_mapper(
-                        mem_region.virtual_start as GuestPhysAddr,
-                        mem_region.physical_start as HostPhysAddr,
-                        mem_region.size as _,
-                        flags,
-                    ))?
+                // Todo: RAM考虑颜色分配
+                MEM_TYPE_RAM => {
+                    let llc_coloring_enabled = false;
+                    info!("llc_coloring_enabled: {}", llc_coloring_enabled);
+                    if llc_coloring_enabled {
+                        self.gpm.insert(MemoryRegion::new_with_color_mapper(
+                            mem_region.virtual_start as GuestPhysAddr,
+                            mem_region.size as _,
+                            flags,
+                        ))?
+                    } else {
+                        self.gpm.insert(MemoryRegion::new_with_offset_mapper(
+                            mem_region.virtual_start as GuestPhysAddr,
+                            mem_region.physical_start as HostPhysAddr,
+                            mem_region.size as _,
+                            flags,
+                        ))?
+                    }
                 }
+                MEM_TYPE_IO => self.gpm.insert(MemoryRegion::new_with_offset_mapper(
+                    mem_region.virtual_start as GuestPhysAddr,
+                    mem_region.physical_start as HostPhysAddr,
+                    mem_region.size as _,
+                    flags,
+                ))?,
                 MEM_TYPE_VIRTIO => {
                     self.mmio_region_register(
                         mem_region.physical_start as _,

@@ -1,3 +1,5 @@
+use core::sync::atomic::AtomicU8;
+
 // Copyright (c) 2025 Syswonder
 // hvisor is licensed under Mulan PSL v2.
 // You can use this software according to the terms and conditions of the Mulan PSL v2.
@@ -192,3 +194,6 @@ pub struct HvIvcConfig {
     pub interrupt_num: u32,
     pub max_peers: u32,
 }
+
+// global config for llc coloring, 0: disabled, 1: enabled, others: unspecified
+pub static OPT_LLC_COLORING: AtomicU8 = AtomicU8::new(1);

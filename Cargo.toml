@@ -47,6 +47,7 @@ raw-cpuid = "10.7.0"
 ############# general ##############
 iommu = [] # supported by: aarch64
 pci = [] # supported by: aarch64, loongarch64
+coloring = [] # supported by: aarch64
 
 ############# aarch64 ##############
 # irqchip driver

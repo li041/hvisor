@@ -12,23 +12,9 @@
 //      https://www.syswonder.org
 //
 // Authors:
-//
-pub mod acpi;
-pub mod consts;
-pub mod cpu;
-pub mod entry;
-pub mod hypercall;
-pub mod iommu;
-pub mod ipi;
-pub mod ivc;
-pub mod llc_coloring;
-pub mod mm;
-pub mod mmu;
-pub mod paging;
-pub mod s2pt;
-pub mod sysreg;
-pub mod trap;
-pub mod zone;
+//  li041 <3253290158@qq.com>
 
-pub use s2pt::stage2_mode_detect;
-pub use s2pt::Stage2PageTable;
+pub fn get_llc_way_size() -> Option<u64> {
+    // RISC-V doesn't support getting cache info by probing the hardware.
+    return None;
+}

@@ -54,20 +54,23 @@ mod consts;
 mod device;
 mod event;
 mod hypercall;
+mod llc_coloring;
 mod memory;
 mod panic;
+mod pci;
 mod percpu;
 mod platform;
 mod zone;
 
-mod pci;
-
 #[cfg(test)]
 mod tests;
 
+use crate::arch::acpi::find_rsdp;
 use crate::arch::iommu::iommu_init;
+use crate::arch::llc_coloring::get_llc_way_size;
 use crate::arch::mm::arch_setup_parange;
 use crate::consts::{hv_end, mem_pool_start, MAX_CPU_NUM};
+use crate::llc_coloring::llc_coloring_init;
 use arch::{cpu::cpu_start, entry::arch_entry};
 use config::root_zone_config;
 use core::sync::atomic::{AtomicI32, AtomicU32, Ordering};
@@ -123,6 +126,8 @@ fn primary_init_early() {
         option_env!("ARCH").unwrap_or(""),
         option_env!("STATS").unwrap_or("off"),
     );
+    // Todo: 需要在frame_allocator之前区分颜色, 然后把hvisor搬到对应的区域, hvisor自己的代码段和数据段可以不用直接映射, 这部分需要管理
+    llc_coloring_init();
     memory::frame::init();
     memory::frame::test();
     event::init();

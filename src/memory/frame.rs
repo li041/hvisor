@@ -21,8 +21,10 @@ use bitmap_allocator::BitAlloc;
 use spin::Mutex;
 
 use super::addr::{align_down, align_up, is_aligned, PhysAddr};
+use crate::arch::llc_coloring;
 use crate::consts::PAGE_SIZE;
 use crate::error::HvResult;
+use crate::llc_coloring::{HVISOR_COLOR, LLC_COLORING_ENABLED, MAX_NR_COLORS};
 
 // Support max 1M * 4096 = 1GB memory.
 type FrameAlloc = bitmap_allocator::BitAlloc1M;
@@ -50,9 +52,26 @@ impl FrameAllocator {
     }
 
     fn init(&mut self, base: PhysAddr, size: usize) {
-        self.base = align_up(base);
-        let page_count = align_up(size) / PAGE_SIZE;
-        self.inner.insert(0..page_count);
+        // let llc_coloring_enabled = unsafe { LLC_COLORING_ENABLED };
+        let llc_coloring_enabled = false;
+        if llc_coloring_enabled {
+            let colors = HVISOR_COLOR.get().unwrap();
+            let nr_colors = *MAX_NR_COLORS.get().unwrap();
+            self.base = align_up(base);
+            let page_count = align_up(size) / PAGE_SIZE;
+            let start_pfn = self.base / PAGE_SIZE;
+            for i in 0..page_count {
+                let pfn = start_pfn + i;
+                let color = pfn % nr_colors;
+                if colors.contains(&color) {
+                    self.inner.insert(i..i + 1);
+                }
+            }
+        } else {
+            self.base = align_up(base);
+            let page_count = align_up(size) / PAGE_SIZE;
+            self.inner.insert(0..page_count);
+        }
     }
 
     /// # Safety
@@ -130,6 +149,7 @@ impl Frame {
 
     /// Allocate contiguous physical frames.
     pub fn new_contiguous(frame_count: usize, align_log2: usize) -> HvResult<Self> {
+        info!("Frame new_contiguous requires {} frame", frame_count);
         unsafe {
             FRAME_ALLOCATOR
                 .lock()
@@ -291,6 +311,12 @@ pub fn test() {
         let frame = Frame::new().unwrap();
         // println!("{:x?}", frame);
         v.push(frame);
+    }
+    // try to access frame
+    let mut test_slice: [u8; 4096] = [0; 4096];
+    test_slice[0] = 255;
+    for i in 0..5 {
+        v[i].as_slice_mut().copy_from_slice(&test_slice);
     }
     v.clear();
     for _ in 0..5 {
