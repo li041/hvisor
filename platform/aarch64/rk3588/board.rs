@@ -45,7 +45,7 @@ pub const ROOT_ZONE_MEMORY_REGIONS: [HvConfigMemoryRegion; 10] = [
         mem_type: MEM_TYPE_RAM,
         physical_start: 0x200000,
         virtual_start: 0x200000,
-        size: 0x8200000,
+        size: 0x81fd000,
     },
     HvConfigMemoryRegion {
         mem_type: MEM_TYPE_RAM,
@@ -186,8 +186,8 @@ pub const ROOT_ZONE_IVC_CONFIG: [HvIvcConfig; 1] = [
     HvIvcConfig {
         ivc_id: 0,
         peer_id: 0,
-        control_table_ipa: 0xD0000000,
-        shared_mem_ipa: 0xD0001000,
+        control_table_ipa: 0x83fd000,
+        shared_mem_ipa: 0x83fe000,
         rw_sec_size: 0,
         out_sec_size: 0x1000,
         interrupt_num: 65,
