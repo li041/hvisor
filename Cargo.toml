@@ -61,6 +61,9 @@ uart_16550 = []
 sifive_ccache = []
 eic7700_sysreg = []
 
+# cache partitioning
+mpam = []
+
 ############## riscv64 #############
 # irqchip driver
 plic = []
