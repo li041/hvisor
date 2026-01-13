@@ -93,49 +93,47 @@ const TIMER_INTERRUPT_PRINT_INTERVAL: u64 = 50;
 
 pub fn gicv3_handle_irq_el1() {
     while let Some(irq_id) = pending_irq() {
-        if irq_id < 8 {
-            trace!("sgi get {}, try to handle...", irq_id);
-            deactivate_irq(irq_id);
-            let mut ipi_handled = false;
-            if irq_id == SGI_IPI_ID as _ {
-                ipi_handled = check_events();
-            }
-            if !ipi_handled {
-                trace!("sgi get {}, inject", irq_id);
-                inject_irq(irq_id, false);
-            }
-        } else if irq_id < 16 {
-            warn!("skip sgi {}", irq_id);
-            deactivate_irq(irq_id);
-        } else {
-            if irq_id == 27 {
-                // virtual timer interrupt
-                TIMER_INTERRUPT_COUNTER.fetch_add(1, core::sync::atomic::Ordering::SeqCst);
-                if TIMER_INTERRUPT_COUNTER.load(core::sync::atomic::Ordering::SeqCst)
-                    % TIMER_INTERRUPT_PRINT_INTERVAL
-                    == 0
-                {
-                    trace!(
-                        "Virtual timer interrupt, counter = {}",
-                        TIMER_INTERRUPT_COUNTER.load(core::sync::atomic::Ordering::SeqCst)
-                    );
+        // SGI interrupts (0-15)
+        if irq_id < 16 {
+            if irq_id < 8 {
+                trace!("SGI received {}, try to handle...", irq_id);
+                deactivate_irq(irq_id);
+
+                if irq_id == SGI_IPI_ID as _ && check_events() {
+                    continue;
                 }
-            } else if irq_id == 25 {
-                // maintenace interrupt
-                handle_maintenace_interrupt();
-            } else if irq_id > 31 {
-                //inject phy irq
-                trace!("*** get spi_irq id = {}", irq_id);
+
+                trace!("SGI {} not handled, injecting", irq_id);
+                inject_irq(irq_id, false);
             } else {
-                warn!("not konw irq id = {}", irq_id);
+                warn!("Skipping SGI {}", irq_id);
+                deactivate_irq(irq_id);
             }
-            if irq_id != 25 {
-                inject_irq(irq_id, true);
-            }
-            deactivate_irq(irq_id);
+            continue;
         }
+
+        // Special interrupts
+        match irq_id {
+            25 => handle_maintenace_interrupt(),
+            27 => {
+                let count =
+                    TIMER_INTERRUPT_COUNTER.fetch_add(1, core::sync::atomic::Ordering::SeqCst) + 1;
+                if count % TIMER_INTERRUPT_PRINT_INTERVAL == 0 {
+                    trace!("Virtual timer interrupt, counter = {}", count);
+                }
+            }
+            id if id > 31 => trace!("*** SPI IRQ received, id = {}", id),
+            id => warn!("Unknown IRQ id = {}", id),
+        }
+
+        if irq_id != 25 {
+            inject_irq(irq_id, irq_id > 31);
+        }
+
+        deactivate_irq(irq_id);
     }
-    trace!("handle done")
+
+    trace!("IRQ handling done");
 }
 
 fn pending_irq() -> Option<usize> {
@@ -284,25 +282,27 @@ pub fn inject_irq(irq_id: usize, is_hardware: bool) -> bool {
     let elsr: u64 = read_sysreg!(ich_elrsr_el2);
     let vtr = read_sysreg!(ich_vtr_el2) as usize;
     let lr_num: usize = (vtr & 0xf) + 1;
-    let mut free_ir = -1 as isize;
-    for i in 0..lr_num {
-        // find a free list register
-        if (1 << i) & elsr > 0 {
-            if free_ir == -1 {
-                free_ir = i as isize;
-            }
-            continue;
-        }
-        let lr_val = read_lr(i) as usize;
+
+    let free_ir = elsr.trailing_zeros();
+    trace!("To Inject IRQ {}, find lr {}", irq_id, free_ir);
+    if free_ir < lr_num as u32 {
+        let lr_val = read_lr(free_ir as usize) as usize;
         // if a virtual interrupt is enabled and equals to the physical interrupt irq_id
         if (lr_val & LR_VIRTIRQ_MASK) == irq_id {
             trace!("virtual irq {} enables again", irq_id);
             return true;
         }
-    }
-    trace!("To Inject IRQ {}, find lr {}", irq_id, free_ir);
+        let mut val = irq_id as u64; //v intid
+        val |= 1 << 60; //group 1
+        val |= 1 << 62; //state pending
 
-    if free_ir == -1 {
+        if !is_sgi(irq_id as _) && is_hardware {
+            val |= 1 << 61; //map hardware
+            val |= (irq_id as u64) << 32; //pINTID
+        }
+        write_lr(free_ir as usize, val);
+        return true;
+    } else {
         trace!("all list registers are valid, add to pending queue");
         // If all list registers are valid, add this virtual irq to pending queue,
         // and enable an underflow maintenace interrupt. When list registers are
@@ -315,17 +315,6 @@ pub fn inject_irq(irq_id: usize, is_hardware: bool) -> bool {
             .unwrap();
         enable_maintenace_interrupt(true);
         return false;
-    } else {
-        let mut val = irq_id as u64; //v intid
-        val |= 1 << 60; //group 1
-        val |= 1 << 62; //state pending
-
-        if !is_sgi(irq_id as _) && is_hardware {
-            val |= 1 << 61; //map hardware
-            val |= (irq_id as u64) << 32; //pINTID
-        }
-        write_lr(free_ir as usize, val);
-        return true;
     }
 }
 
