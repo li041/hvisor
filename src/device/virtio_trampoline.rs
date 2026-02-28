@@ -42,6 +42,7 @@ const QUEUE_NOTIFY: usize = 0x50;
 pub const MAX_REQ: u32 = 32;
 pub const MAX_DEVS: usize = 4; // Attention: The max virtio-dev number for vm is 4.
 pub const MAX_CPUS: usize = 4;
+pub const MAX_BACKOFF: usize = 1024;
 
 #[cfg(not(target_arch = "riscv64"))]
 pub const IRQ_WAKEUP_VIRTIO_DEVICE: usize = 32 + 0x20;
@@ -56,11 +57,19 @@ pub fn mmio_virtio_handler(mmio: &mut MMIOAccess, base: usize) -> HvResult {
         trace!("notify !!!, cpu id is {}", this_cpu_id());
     }
     mmio.address += base;
+    let mut backoff = 1;
     let mut dev = VIRTIO_BRIDGE.lock();
     while dev.is_req_list_full() {
         // When root linux's cpu is in el2's finish req handler and is getting the dev lock,
         // if we don't release dev lock, it will cause a dead lock.
         drop(dev);
+        // Exponential Backoff:
+        // spin_delay, don't take the lock too long time.
+        for _ in 0..backoff {
+            core::hint::spin_loop();
+        }
+        backoff <<= 1;
+        backoff = backoff.min(MAX_BACKOFF);
         dev = VIRTIO_BRIDGE.lock();
     }
     let hreq = HvisorDeviceReq::new(
