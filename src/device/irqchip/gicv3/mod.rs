@@ -381,7 +381,12 @@ pub fn inject_irq(irq_id: usize, is_hardware: bool) -> bool {
         val |= 1 << 60; //group 1
         val |= 1 << 62; //state pending
 
-        if !is_sgi(irq_id as _) && is_hardware {
+        // HW=1 requires pINTID in ICH_LR bits[44:32] (13 bits, max 8191).
+        // PPIs (16-31) and SPIs (32-1019) fit fine and NEED HW=1 for correct
+        // physical/virtual interrupt linkage (especially timer PPI 27).
+        // LPIs (INTID >= 8192) overflow the pINTID field, so use HW=0 and
+        // rely on hvisor's deactivate_irq() for physical deactivation.
+        if !is_sgi(irq_id as _) && is_hardware && irq_id < 8192 {
             val |= 1 << 61; //map hardware
             val |= (irq_id as u64) << 32; //pINTID
         }

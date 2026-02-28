@@ -20,7 +20,7 @@ use spin::{Mutex, RwLock};
 use crate::arch::cpu::{this_cpu_id, ArchCpu};
 use crate::consts::{INVALID_ADDRESS, PER_CPU_ARRAY_PTR, PER_CPU_SIZE};
 use crate::memory::addr::VirtAddr;
-use crate::zone::Zone;
+use crate::zone::{root_zone, Zone};
 use crate::{arch, ENTERED_CPUS};
 use core::fmt::Debug;
 use core::sync::atomic::Ordering;
@@ -96,7 +96,9 @@ pub fn this_cpu_data<'a>() -> &'a mut PerCpu {
 
 #[allow(unused)]
 pub fn this_zone() -> Arc<RwLock<Zone>> {
-    this_cpu_data().zone.clone().unwrap()
+     // shutdown/解绑过程中 zone 可能暂时为 None；此处避免 unwrap 直接 panic，
+    // 降级为 root_zone 以保证 hypervisor 不被打崩（同时由 shutdown 流程保证不会在 CPU 仍运行时清 zone）。
+    this_cpu_data().zone.clone().unwrap_or_else(root_zone)
 }
 
 #[repr(C)]
