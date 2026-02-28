@@ -22,12 +22,14 @@ pub const MEM_TYPE_RAM: u32 = 0;
 pub const MEM_TYPE_IO: u32 = 1;
 pub const MEM_TYPE_VIRTIO: u32 = 2;
 
-pub const CONFIG_MAGIC_VERSION: usize = 0x3;
-pub const CONFIG_MAX_MEMORY_REGIONS: usize = 358;
+
+pub const CONFIG_MAGIC_VERSION: usize = 0x1;
+pub const CONFIG_MAX_MEMORY_REGIONS: usize = 40;
 pub const CONFIG_MAX_INTERRUPTS: usize = 37;
 pub const CONFIG_NAME_MAXLEN: usize = 32;
-pub const CONFIG_MAX_IVC_CONGIGS: usize = 2;
+pub const CONFIG_MAX_IVC_CONGIGS: usize = 6;
 pub const CONFIG_MAX_PCI_DEV: usize = 16;
+
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]

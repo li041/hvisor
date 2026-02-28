@@ -6,6 +6,7 @@
 /images/*
 /platform/*/*/image/kernel/*
 /platform/*/*/image/virtdisk/*
+/platform/*/*/image/vmlinux
 /tools/hvisor
 /tmp
 *.mod.[co]

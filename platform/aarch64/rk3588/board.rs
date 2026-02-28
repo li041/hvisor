@@ -34,7 +34,7 @@ pub const ROOT_ZONE_CPUS: u64 = (1 << 0) | (1 << 1);
 
 pub const ROOT_ZONE_NAME: &str = "root-linux";
 
-pub const ROOT_ZONE_MEMORY_REGIONS: [HvConfigMemoryRegion; 10] = [
+pub const ROOT_ZONE_MEMORY_REGIONS: [HvConfigMemoryRegion; 16] = [
     HvConfigMemoryRegion {
         mem_type: MEM_TYPE_RAM,
         physical_start: 0x100000,
@@ -45,14 +45,20 @@ pub const ROOT_ZONE_MEMORY_REGIONS: [HvConfigMemoryRegion; 10] = [
         mem_type: MEM_TYPE_RAM,
         physical_start: 0x200000,
         virtual_start: 0x200000,
-        size: 0x81fd000,
+        size:0x8200000
     },
     HvConfigMemoryRegion {
         mem_type: MEM_TYPE_RAM,
         physical_start: 0x9400000,
         virtual_start: 0x9400000,
-        size: 0xe6c00000,
-    },
+        size: 0xc6c00000,
+    },//d0000000
+    HvConfigMemoryRegion {
+        mem_type: MEM_TYPE_RAM,
+        physical_start: 0xd0009000,
+        virtual_start: 0xd0009000,
+        size: 0x1fff7000,
+    },//f0000000
     HvConfigMemoryRegion {
         mem_type: MEM_TYPE_RAM,
         physical_start: 0x100000000,
@@ -71,86 +77,76 @@ pub const ROOT_ZONE_MEMORY_REGIONS: [HvConfigMemoryRegion; 10] = [
         virtual_start: 0x4f0000000,
         size: 0x10000000,
     },
+    //UP IS MEM
     HvConfigMemoryRegion {
         mem_type: MEM_TYPE_IO,
-        physical_start: 0xfc000000,
-        virtual_start: 0xfc000000,
-        size: 0x2000000,
+        physical_start: 0xf0000000,
+        virtual_start: 0xf0000000,
+        size: 0x1000000,
     },
+
     HvConfigMemoryRegion {
-        mem_type: MEM_TYPE_IO,
-        physical_start: 0xfe800000,
-        virtual_start: 0xfe800000,
-        size: 0x800000,
-    },
-    HvConfigMemoryRegion {
-        mem_type: MEM_TYPE_IO,
-        physical_start: 0xfe000000,
-        virtual_start: 0xfe000000,
-        size: 0x680000,
-    },
-     HvConfigMemoryRegion {
         mem_type: MEM_TYPE_IO,
         physical_start: 0xfb000000,
         virtual_start: 0xfb000000,
         size: 0x1000000,
     },//GPU G610
-
-    // HvConfigMemoryRegion {
-    //     mem_type: MEM_TYPE_RAM,
-    //     physical_start: 0x0000000000200000,
-    //     virtual_start: 0x0000000000200000,
-    //     size: 0x00000000083fffff - 0x0000000000200000 + 1,
-    // }, // ram
-    // HvConfigMemoryRegion {
-    //     mem_type: MEM_TYPE_RAM,
-    //     physical_start: 0x0000000009400000,
-    //     virtual_start: 0x0000000009400000,
-    //     size: 0x00000000efffffff - 0x0000000009400000 + 1,
-    // }, // ram
-    // HvConfigMemoryRegion {
-    //     mem_type: MEM_TYPE_RAM,
-    //     physical_start: 0x0000000100000000,
-    //     virtual_start: 0x0000000100000000,
-    //     size: 0x00000003fbffffff - 0x0000000100000000 + 1,
-    // }, // ram
-    // HvConfigMemoryRegion {
-    //     mem_type: MEM_TYPE_RAM,
-    //     physical_start: 0x00000003fc500000,
-    //     virtual_start: 0x00000003fc500000,
-    //     size: 0x00000003ffefffff - 0x00000003fc500000 + 1,
-    // }, // ram
-    // HvConfigMemoryRegion {
-    //     mem_type: MEM_TYPE_RAM,
-    //     physical_start: 0x00000004f0000000,
-    //     virtual_start: 0x00000004f0000000,
-    //     size: 0x00000004ffffffff - 0x00000004f0000000 + 1,
-    // }, // ram
-    // HvConfigMemoryRegion {
-    //     mem_type: MEM_TYPE_IO,
-    //     physical_start: 0xfeb50000,
-    //     virtual_start: 0xfeb50000,
-    //     size: 0x100,
-    // }, // uart
-    // HvConfigMemoryRegion {
-    //     mem_type: MEM_TYPE_IO,
-    //     physical_start: 0xfd000000,
-    //     virtual_start: 0xfd000000,
-    //     size: 0x1000000,
-    // },
-    // HvConfigMemoryRegion {
-    //     mem_type: MEM_TYPE_IO,
-    //     physical_start: 0x100000,
-    //     virtual_start: 0x100000,
-    //     size: 0x100000,
-    // }
+    HvConfigMemoryRegion {
+        mem_type: MEM_TYPE_IO,
+        physical_start: 0xfc000000,
+        virtual_start: 0xfc000000,
+        size: 0x2000000,
+    },//FE000000
+    HvConfigMemoryRegion {
+        mem_type: MEM_TYPE_IO,
+        physical_start: 0xfe000000,
+        virtual_start: 0xfe000000,
+        size: 0x1b0000,
+    },//FE1C0000, RESERVE GMAC1
+    HvConfigMemoryRegion {
+        mem_type: MEM_TYPE_IO,
+        physical_start: 0xfe1c0000,
+        virtual_start: 0xfe1c0000,
+        size: 0x10000,
+    },//
+    HvConfigMemoryRegion {
+        mem_type: MEM_TYPE_IO,
+        physical_start: 0xfe1d0000,
+        virtual_start: 0xfe1d0000,
+        size: 0x4a0000,
+    },//0xfe680000
+    HvConfigMemoryRegion {
+        mem_type: MEM_TYPE_IO,
+        physical_start: 0xfe800000,
+        virtual_start: 0xfe800000,
+        size: 0x800000,
+    },//FF000000
+    HvConfigMemoryRegion {
+        mem_type: MEM_TYPE_IO,
+        physical_start: 0x900000000,
+        virtual_start: 0x900000000,
+        size: 0x40000000,
+    },
+    HvConfigMemoryRegion {
+        mem_type: MEM_TYPE_IO,
+        physical_start: 0xa40000000,
+        virtual_start: 0xa40000000,
+        size: 0x400000,
+    },
 ];
 
 // pub const ROOT_ZONE_IRQS: [u32; 10] = [39, 64, 235, 237, 309, 312, 360, 365, 429, 455];
-pub const ROOT_ZONE_IRQS: [u32; 37] = [
-    39, 41, 42, 43, 45, 46, 64, 65, 120, 121,124,125,126, 188,235, 237, 247, 248, 250, 251, 252,253,258,259, 265, 266, 309, 312,
-    313, 355, 360, 365, 423, 424, 425, 429, 455,
+// pub const ROOT_ZONE_IRQS: [u32; 26] = [
+//     39, 41, 42, 43, 45, 46, 64, 65, 120, 121, 188, 235, 237, 252, 253, 258, 265, 266, 309, 312,
+//     313, 355, 360, 365, 429, 455,
+// ];
+
+pub const ROOT_ZONE_IRQS: [u32; 31] = [
+    39, 41, 42, 43, 45, 46, 64, 65, 67, 69, 120, 121, 188, 235, 236, 237, 252, 253,
+    291, 292, 293, 294, 295, // pcie3x4: err(SPI259), legacy(SPI260), msg(SPI261), pmc(SPI262), sys(SPI263)
+    309, 312, 313, 355, 360, 365, 429, 455,
 ];
+
 
 pub const ROOT_ARCH_ZONE_CONFIG: HvArchZoneConfig = HvArchZoneConfig {
     gicd_base: 0xfe600000,
@@ -164,8 +160,8 @@ pub const ROOT_ARCH_ZONE_CONFIG: HvArchZoneConfig = HvArchZoneConfig {
     gich_size: 0x10000,
     gicv_base: 0x8040000,
     gicv_size: 0x10000,
-    gits_base: 0x8080000,
-    gits_size: 0x20000,
+    gits_base: 0x0,
+    gits_size: 0x00,
 };
 
 pub const ROOT_PCI_CONFIG: HvPciConfig = HvPciConfig {
@@ -182,18 +178,37 @@ pub const ROOT_PCI_CONFIG: HvPciConfig = HvPciConfig {
     pci_mem64_base: 0x8000000000,
 };
 
-pub const ROOT_ZONE_IVC_CONFIG: [HvIvcConfig; 1] = [
+pub const ROOT_ZONE_IVC_CONFIG: [HvIvcConfig; 3] = [
     HvIvcConfig {
         ivc_id: 0,
         peer_id: 0,
-        control_table_ipa: 0x83fd000,
-        shared_mem_ipa: 0x83fe000,
+        control_table_ipa: 0xd0000000,
+        shared_mem_ipa: 0xd0001000,
         rw_sec_size: 0,
         out_sec_size: 0x1000,
         interrupt_num: 65,
         max_peers: 2,
+    },
+    HvIvcConfig {
+        ivc_id: 1,
+        peer_id: 0,
+        control_table_ipa: 0xd0003000,
+        shared_mem_ipa: 0xd0004000,
+        rw_sec_size: 0,
+        out_sec_size: 0x1000,
+        interrupt_num: 67,
+        max_peers: 2,
+    },
+    HvIvcConfig {
+        ivc_id: 2,
+        peer_id: 0,
+        control_table_ipa: 0xd0006000,
+        shared_mem_ipa: 0xd0007000,
+        rw_sec_size: 0,
+        out_sec_size: 0x1000,
+        interrupt_num: 69,
+        max_peers: 2,
     }
 ];
-
 
 pub const ROOT_PCI_DEVS: [u64; 2] = [0, 1 << 3];
