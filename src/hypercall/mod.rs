@@ -33,7 +33,7 @@ use core::convert::TryFrom;
 use core::sync::atomic::{fence, Ordering};
 
 #[cfg(target_arch = "aarch64")]
-use crate::ivc::{IvcInfo, IVC_INFOS};
+use crate::ivc::{cleanup_zone_ivc, IvcInfo, IVC_INFOS};
 
 use numeric_enum_macro::numeric_enum;
 
@@ -336,6 +336,10 @@ impl<'a> HyperCall<'a> {
 
         drop(zone_w);
         drop(zone);
+        
+        // Clean up IVC records and info for this zone before removing it
+        cleanup_zone_ivc(zone_id as _);
+        
         remove_zone(zone_id as _);
         info!("zone {} has been shutdown", zone_id);
         HyperCallResult::Ok(0)
