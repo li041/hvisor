@@ -14191,13 +14191,6 @@ hvisor_ivc_device_0 {
 hvisor_ivc_device_1 {
                                 compatible = "hvisor";
                                 interrupt-parent = <0x01>;
-                                interrupts = <0x00 0x23 0x01>;
-                                /* added dynamically
-                                */
-                        };
-hvisor_ivc_device_2 {
-                                compatible = "hvisor";
-                                interrupt-parent = <0x01>;
                                 interrupts = <0x00 0x25 0x01>;
                                 /* added dynamically
                                 */
@@ -14246,7 +14239,6 @@ hvisor_ivc_device_2 {
           no-map;
           reg = <0x00 0xd0000000 0x00 0x9000>;
   };
-
 
   ramoops: ramoops@110000 {
    compatible = "ramoops";

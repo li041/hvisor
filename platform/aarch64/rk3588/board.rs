@@ -141,8 +141,8 @@ pub const ROOT_ZONE_MEMORY_REGIONS: [HvConfigMemoryRegion; 16] = [
 //     313, 355, 360, 365, 429, 455,
 // ];
 
-pub const ROOT_ZONE_IRQS: [u32; 31] = [
-    39, 41, 42, 43, 45, 46, 64, 65, 67, 69, 120, 121, 188, 235, 236, 237, 252, 253,
+pub const ROOT_ZONE_IRQS: [u32; 30] = [
+    39, 41, 42, 43, 45, 46, 64, 65, 69, 120, 121, 188, 235, 236, 237, 252, 253,
     291, 292, 293, 294, 295, // pcie3x4: err(SPI259), legacy(SPI260), msg(SPI261), pmc(SPI262), sys(SPI263)
     309, 312, 313, 355, 360, 365, 429, 455,
 ];
@@ -178,7 +178,7 @@ pub const ROOT_PCI_CONFIG: HvPciConfig = HvPciConfig {
     pci_mem64_base: 0x8000000000,
 };
 
-pub const ROOT_ZONE_IVC_CONFIG: [HvIvcConfig; 3] = [
+pub const ROOT_ZONE_IVC_CONFIG: [HvIvcConfig; 2] = [
     HvIvcConfig {
         ivc_id: 0,
         peer_id: 0,
@@ -187,16 +187,6 @@ pub const ROOT_ZONE_IVC_CONFIG: [HvIvcConfig; 3] = [
         rw_sec_size: 0,
         out_sec_size: 0x1000,
         interrupt_num: 65,
-        max_peers: 2,
-    },
-    HvIvcConfig {
-        ivc_id: 1,
-        peer_id: 0,
-        control_table_ipa: 0xd0003000,
-        shared_mem_ipa: 0xd0004000,
-        rw_sec_size: 0,
-        out_sec_size: 0x1000,
-        interrupt_num: 67,
         max_peers: 2,
     },
     HvIvcConfig {
