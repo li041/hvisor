@@ -56,6 +56,9 @@ build_path := target/$(RUSTC_TARGET)/$(MODE)
 hvisor_elf := $(build_path)/hvisor
 hvisor_bin := $(build_path)/hvisor.bin
 image_dir  := platform/$(ARCH)/$(BOARD)/image
+test_dir := ./platform/$(ARCH)/$(BOARD)/test
+perftest_tdownload := $(test_dir)/perftest/tdownload_all.sh
+systemtest_tdownload := $(test_dir)/systemtest/tdownload_all.sh
 
 # Build arguments
 build_args := 
@@ -185,6 +188,19 @@ stest: clean test-pre gen_cargo_config
 	./platform/$(ARCH)/$(BOARD)/test/systemtest/tdownload_all.sh
 	./platform/$(ARCH)/$(BOARD)/test/systemtest/trootfs_deploy.sh
 	./platform/$(ARCH)/$(BOARD)/test/systemtest/tstart.sh
+
+# Performance benchmark: data collection only, does not affect pass/fail.
+# Calls systemtest scripts for DTS, then perftest/tdownload_all.sh when present
+# (fallback to systemtest/tdownload_all.sh), and perftest/trootfs_deploy.sh.
+perf: clean test-pre gen_cargo_config
+	./platform/$(ARCH)/$(BOARD)/test/systemtest/tcompiledtb.sh
+	@if [ -x "$(perftest_tdownload)" ]; then \
+		$(perftest_tdownload); \
+	else \
+		$(systemtest_tdownload); \
+	fi
+	./platform/$(ARCH)/$(BOARD)/test/perftest/trootfs_deploy.sh
+	./platform/$(ARCH)/$(BOARD)/test/perftest/tstart.sh
 
 dtb:
 	@echo "building device tree at platform/$(ARCH)/$(BOARD)/image/dts"
