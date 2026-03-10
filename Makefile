@@ -6,6 +6,13 @@ MODE ?= debug
 BOARD ?= qemu-gicv3
 FEATURES=
 BID ?=
+ptest ?=
+
+ifeq ($(origin ptest),command line)
+ifneq ($(strip $(ptest)),)
+.DEFAULT_GOAL := ptest
+endif
+endif
 
 # if user uses `make ID=aarch64/qemu-gicv2`, we parse it into ARCH and BOARD
 ifeq ($(BID),)
@@ -228,6 +235,32 @@ perf-prepare-img: clean test-pre gen_cargo_config
 	 fi
 	./platform/$(ARCH)/$(BOARD)/test/perftest/trootfs_deploy.sh
 	@echo "READY_IMG=$(PWD)/platform/$(ARCH)/$(BOARD)/image/virtdisk/rootfs1.ext4"
+
+# Run a single perf benchmark (assumes perf image is already prepared).
+# Before test start, rebuild hvisor-tool and deploy artifacts into rootfs.
+# Usage: make ptest=irq | make ptest=net | make ptest=mem
+ptest: ptest-check
+	./platform/$(ARCH)/$(BOARD)/test/systemtest/tcompiledtb.sh
+	./platform/$(ARCH)/$(BOARD)/test/systemtest/trootfs_deploy.sh
+	PTEST=$(ptest) expect -f ./platform/$(ARCH)/$(BOARD)/test/perftest/tstart_one.sh
+
+# Run a single perf benchmark without image prepare step.
+ptest-only: ptest-check
+	PTEST=$(ptest) expect -f ./platform/$(ARCH)/$(BOARD)/test/perftest/tstart_one.sh
+
+ptest-check:
+	@if [ -z "$(ptest)" ]; then \
+		echo "ERROR: ptest is empty. Use: make ptest=irq|net|mem"; \
+		exit 1; \
+	fi
+	@if [ "$(BOARD)" != "qemu-plic" ] && [ "$(BOARD)" != "qemu-gicv3" ]; then \
+		echo "ERROR: ptest only supports BOARD=qemu-plic|qemu-gicv3 (current: $(BOARD))"; \
+		exit 1; \
+	fi
+	@if [ "$(ptest)" != "irq" ] && [ "$(ptest)" != "net" ] && [ "$(ptest)" != "mem" ] && [ "$(ptest)" != "blk" ]; then \
+		echo "ERROR: unsupported ptest='$(ptest)'. Use irq|net|mem|blk"; \
+		exit 1; \
+	fi
 
 dtb:
 	@echo "building device tree at platform/$(ARCH)/$(BOARD)/image/dts"

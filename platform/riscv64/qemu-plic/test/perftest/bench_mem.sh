@@ -96,11 +96,6 @@ else
         rm -f "$BENCH_FILE"
     fi
 fi
-echo "[/proc/meminfo]" | tee -a "$OUTFILE"
-if [ -r /proc/meminfo ]; then
-    cat /proc/meminfo | tee -a "$OUTFILE"
-else
-    echo "/proc/meminfo unavailable" | tee -a "$OUTFILE"
-fi
+
 echo "" | tee -a "$OUTFILE"
 echo "=== Done ===" | tee -a "$OUTFILE"
