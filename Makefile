@@ -202,6 +202,33 @@ perf: clean test-pre gen_cargo_config
 	./platform/$(ARCH)/$(BOARD)/test/perftest/trootfs_deploy.sh
 	./platform/$(ARCH)/$(BOARD)/test/perftest/tstart.sh
 
+# Prepare perf image only: reuse existing rootfs img when present, download
+# missing assets, deploy benchmark scripts/tools into image, and print path.
+perf-prepare-img: clean test-pre gen_cargo_config
+	./platform/$(ARCH)/$(BOARD)/test/systemtest/tcompiledtb.sh
+	@if [ -x "$(perftest_tdownload)" ]; then \
+		$(perftest_tdownload); \
+	else \
+		$(systemtest_tdownload); \
+	fi
+	@ROOTFS_EXT4="platform/$(ARCH)/$(BOARD)/image/virtdisk/rootfs1.ext4"; \
+	 ROOTFS_ZIP="rootfs1.zip"; \
+	 if [ ! -f "$$ROOTFS_EXT4" ]; then \
+		echo "WARN: $$ROOTFS_EXT4 not found after download, trying unzip $$ROOTFS_ZIP"; \
+		if [ -f "$$ROOTFS_ZIP" ]; then \
+			unzip -qo "$$ROOTFS_ZIP" -d "platform/$(ARCH)/$(BOARD)/image/virtdisk"; \
+		else \
+			echo "ERROR: missing $$ROOTFS_EXT4 and $$ROOTFS_ZIP"; \
+			exit 1; \
+		fi; \
+	 fi; \
+	 if [ ! -f "$$ROOTFS_EXT4" ]; then \
+		echo "ERROR: still missing $$ROOTFS_EXT4 after unzip"; \
+		exit 1; \
+	 fi
+	./platform/$(ARCH)/$(BOARD)/test/perftest/trootfs_deploy.sh
+	@echo "READY_IMG=$(PWD)/platform/$(ARCH)/$(BOARD)/image/virtdisk/rootfs1.ext4"
+
 dtb:
 	@echo "building device tree at platform/$(ARCH)/$(BOARD)/image/dts"
 	@if [ ! -d "platform/$(ARCH)/$(BOARD)/image/dts" ]; then echo "ERROR: dts directory not found"; exit 1; fi
