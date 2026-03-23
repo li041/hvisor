@@ -20,7 +20,10 @@ use crate::{
         IPI_EVENT_CLEAR_INJECT_IRQ, IPI_EVENT_SEND_IPI, IPI_EVENT_UPDATE_HART_LINE, MAX_CPU_NUM,
     },
     cpu_data::this_cpu_data,
-    device::{irqchip::inject_irq, virtio_trampoline::handle_virtio_irq},
+    device::{
+        irqchip::inject_irq,
+        virtio_trampoline::{handle_virtio_irq, VIRTIO_BRIDGE},
+    },
     platform::IRQ_WAKEUP_VIRTIO_DEVICE,
 };
 use alloc::{collections::VecDeque, vec::Vec};
@@ -100,6 +103,7 @@ pub fn check_events() -> bool {
             true
         }
         Some(IPI_EVENT_WAKEUP_VIRTIO_DEVICE) => {
+            VIRTIO_BRIDGE.ipi_pending.store(false, core::sync::atomic::Ordering::Release);
             inject_irq(IRQ_WAKEUP_VIRTIO_DEVICE, false);
             true
         }

@@ -141,6 +141,8 @@ impl<'a> HyperCall<'a> {
         }
         let mut res_agent = VIRTIO_BRIDGE.res_agent();
         let mut map_irq = VIRTIO_IRQS.lock();
+        let mut ipi_targets: u64 = 0; // bitmap, supports up to 64 CPUs
+
         while !res_agent.is_empty() {
             let (_res_front, irq_id, target_zone) = res_agent.peek_front();
             let target_cpu = match find_zone(target_zone as _) {
@@ -159,16 +161,20 @@ impl<'a> HyperCall<'a> {
                 assert!(len + 1 < MAX_DEVS);
                 irq_list[len + 1] = irq_id;
                 irq_list[0] += 1;
-                send_event(
-                    target_cpu as _,
-                    SGI_IPI_ID as _,
-                    IPI_EVENT_VIRTIO_INJECT_IRQ,
-                );
+                ipi_targets |= 1 << target_cpu;
             }
 
             res_agent.advance_front();
         }
         drop(res_agent);
+
+        // Batch-send IPIs: each target CPU receives at most one IPI
+        while ipi_targets != 0 {
+            let cpu = ipi_targets.trailing_zeros() as usize;
+            send_event(cpu, SGI_IPI_ID as _, IPI_EVENT_VIRTIO_INJECT_IRQ);
+            ipi_targets &= !(1 << cpu);
+        }
+
         HyperCallResult::Ok(0)
     }
 

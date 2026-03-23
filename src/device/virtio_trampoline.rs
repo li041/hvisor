@@ -143,12 +143,19 @@ pub fn mmio_virtio_handler(mmio: &mut MMIOAccess, base: usize) -> HvResult {
 #[cfg(not(target_arch = "loongarch64"))]
 pub fn check_need_wakeup_and_send_ipi(is_send_ipi: &mut bool) {
     if !(*is_send_ipi) && VIRTIO_BRIDGE.need_wakeup() {
-        debug!("need wakeup (recheck), sending ipi to wake up virtio device");
-        send_event(
-            get_target_cpu(IRQ_WAKEUP_VIRTIO_DEVICE, 0),
-            SGI_IPI_ID as _,
-            IPI_EVENT_WAKEUP_VIRTIO_DEVICE,
-        );
+        // Use compare_exchange to ensure only one CPU sends the wakeup IPI
+        if VIRTIO_BRIDGE
+            .ipi_pending
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
+            .is_ok()
+        {
+            debug!("need wakeup (recheck), sending ipi to wake up virtio device");
+            send_event(
+                get_target_cpu(IRQ_WAKEUP_VIRTIO_DEVICE, 0),
+                SGI_IPI_ID as _,
+                IPI_EVENT_WAKEUP_VIRTIO_DEVICE,
+            );
+        }
         *is_send_ipi = true;
     }
 }
@@ -169,6 +176,7 @@ pub fn handle_virtio_irq() {
 pub struct VirtioBridgeController {
     base_address: AtomicUsize,
     is_enable: AtomicBool,
+    pub ipi_pending: AtomicBool,
     req_lock: Mutex<()>,
     res_lock: Mutex<()>,
 }
@@ -178,6 +186,7 @@ impl VirtioBridgeController {
         Self {
             base_address: AtomicUsize::new(0),
             is_enable: AtomicBool::new(false),
+            ipi_pending: AtomicBool::new(false),
             req_lock: Mutex::new(()),
             res_lock: Mutex::new(()),
         }
