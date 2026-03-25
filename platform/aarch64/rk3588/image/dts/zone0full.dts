@@ -2699,7 +2699,7 @@ gpu_opp_table: gpu-opp-table {
   #iommu-cells = <1>;
   status = "disabled";
  };
-
+//LIGHT
  usbhost3_0: usbhost3_0 {
   compatible = "rockchip,rk3588-dwc3", "rockchip,rk3399-dwc3";
   clocks = <&cru 377>, <&cru 376>,
@@ -11589,6 +11589,7 @@ gpu_opp_table: gpu-opp-table {
   usbdp1 = &usbdp_phy1;
  };
 
+
  rkcif_mipi_lvds4: rkcif-mipi-lvds4 {
   compatible = "rockchip,rkcif-mipi-lvds";
   rockchip,hw = <&rkcif>;
@@ -14037,7 +14038,7 @@ gpu_opp_table: gpu-opp-table {
 };
 
 &usb_host0_ohci {
- status = "okay";
+ status = "disabled";
 };
 
 &usb_host1_ehci {
@@ -14071,7 +14072,7 @@ gpu_opp_table: gpu-opp-table {
 };
 
 &usbdp_phy1_u3 {
- maximum-speed = "high-speed";
+ maximum-speed = "super-speed";
  status = "okay";
 };
 
@@ -14079,20 +14080,19 @@ gpu_opp_table: gpu-opp-table {
  status = "okay";
 };
 
-
 &usbdrd_dwc3_1 {
  dr_mode = "host";
- maximum-speed = "high-speed";
+ maximum-speed = "super-speed";
  status = "okay";
 };
 
 &usbhost3_0 {
- status = "okay";
+ status = "disabled";
 };
 
 &usbhost_dwc3_0 {
  dr_mode = "host";
- status = "okay";
+ status = "disabled";
 };
 
 &vdd_log_s0 {
@@ -14173,7 +14173,7 @@ hvisor_virtio_device {
   compatible = "hvisor";
   interrupt-parent = <0x01>;
   interrupts = <0x00 0x20 0x01>;
-  clocks = <&cru 100>, <&cru 686>, <&cru 687>, <&cru 191>, <&cru 173>, <&cru 92>, <&cru 95>, <&cru 116>, <&cru 115>, <&cru 324>, <&cru 325>, <&cru 360>, <&cru 365>, <&cru 323>, <&cru 359>, <&cru 364>, <&cru 322>,<&cru 522>,<&cru 276>, <&cru 277>, <&cru 278>, <&scmi_clk 5>, <&cru 277>, <&cru 278>, <&cru 276>;
+  clocks = <&cru 100>, <&cru 686>, <&cru 687>, <&cru 191>, <&cru 173>, <&cru 92>, <&cru 95>, <&cru 116>, <&cru 115>, <&cru 324>, <&cru 325>, <&cru 360>, <&cru 365>, <&cru 323>, <&cru 359>, <&cru 364>, <&cru 322>,<&cru 522>,<&cru 276>, <&cru 277>, <&cru 278>, <&scmi_clk 5>, <&cru 277>, <&cru 278>, <&cru 276>, <&cru 413>, <&cru 414>, <&cru 422>, <&cru 421>, <&cru 420>, <&cru 679>;
  
   #clock-cells = <0x00>;
   clock-names = "baudclk", "apb_pclk","clk_mali", "clk_gpu_coregroup","clk_gpu_stacks", "clk_gpu";
@@ -15041,12 +15041,12 @@ hvisor_ivc_device_1 {
 
 &uart4 {
   pinctrl-0 = <&uart4m1_xfer>;
-  status = "okay";
+  status = "disabled";
 };
 
 &uart6 {
   pinctrl-0 = <&uart6m2_xfer>;
-  status = "okay";
+  status = "disabled";
 };
 
 &uart7 {
