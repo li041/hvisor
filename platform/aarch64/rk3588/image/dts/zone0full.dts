@@ -2699,7 +2699,7 @@ gpu_opp_table: gpu-opp-table {
   #iommu-cells = <1>;
   status = "disabled";
  };
-//LIGHT
+
  usbhost3_0: usbhost3_0 {
   compatible = "rockchip,rk3588-dwc3", "rockchip,rk3399-dwc3";
   clocks = <&cru 377>, <&cru 376>,
