@@ -238,19 +238,27 @@ perf-prepare-img: clean test-pre gen_cargo_config
 
 # Run a single perf benchmark (assumes perf image is already prepared).
 # Before test start, rebuild hvisor-tool and deploy artifacts into rootfs.
-# Usage: make ptest=irq | make ptest=net | make ptest=mem
+# Usage: make ptest=irq | make ptest=net | make ptest=mem | make ptest=blk
 ptest: ptest-check
 	./platform/$(ARCH)/$(BOARD)/test/systemtest/tcompiledtb.sh
-	./platform/$(ARCH)/$(BOARD)/test/systemtest/trootfs_deploy.sh
-	PTEST=$(ptest) expect -f ./platform/$(ARCH)/$(BOARD)/test/perftest/tstart_one.sh
+	./platform/$(ARCH)/$(BOARD)/test/perftest/trootfs_deploy.sh
+	@if [ "$(ptest)" = "blk" ]; then \
+		expect -f ./platform/$(ARCH)/$(BOARD)/test/perftest/tstart_blk.sh; \
+	else \
+		PTEST=$(ptest) expect -f ./platform/$(ARCH)/$(BOARD)/test/perftest/tstart_one.sh; \
+	fi
 
 # Run a single perf benchmark without image prepare step.
 ptest-only: ptest-check
-	PTEST=$(ptest) expect -f ./platform/$(ARCH)/$(BOARD)/test/perftest/tstart_one.sh
+	@if [ "$(ptest)" = "blk" ]; then \
+		expect -f ./platform/$(ARCH)/$(BOARD)/test/perftest/tstart_blk.sh; \
+	else \
+		PTEST=$(ptest) expect -f ./platform/$(ARCH)/$(BOARD)/test/perftest/tstart_one.sh; \
+	fi
 
 ptest-check:
 	@if [ -z "$(ptest)" ]; then \
-		echo "ERROR: ptest is empty. Use: make ptest=irq|net|mem"; \
+		echo "ERROR: ptest is empty. Use: make ptest=irq|net|mem|blk"; \
 		exit 1; \
 	fi
 	@if [ "$(BOARD)" != "qemu-plic" ] && [ "$(BOARD)" != "qemu-gicv3" ]; then \

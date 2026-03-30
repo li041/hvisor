@@ -6,6 +6,10 @@ WORKSPACE_ROOT="${GITHUB_WORKSPACE:-$(pwd)}"
 PERF_DIR="${WORKSPACE_ROOT}/platform/aarch64/qemu-gicv3/test/perftest"
 ROOTFS_EXT4="${WORKSPACE_ROOT}/platform/aarch64/qemu-gicv3/image/virtdisk/rootfs1.ext4"
 ROOTFS_MNT="${WORKSPACE_ROOT}/platform/aarch64/qemu-gicv3/image/virtdisk/rootfs"
+ROOTFS2_MNT="${WORKSPACE_ROOT}/platform/aarch64/qemu-gicv3/image/virtdisk/rootfs2"
+ROOTFS2_IN_ROOTFS1=""
+
+bench_tools=(fio rt-tests stress-ng iperf3 iproute2)
 
 # Cleanup: unmount bind mounts and rootfs on any exit (error or normal)
 cleanup() {
@@ -14,8 +18,16 @@ cleanup() {
     sudo umount "${ROOTFS_MNT}/sys"  2>/dev/null || true
     sudo umount "${ROOTFS_MNT}/proc" 2>/dev/null || true
     sudo umount "${ROOTFS_MNT}/dev"  2>/dev/null || true
+    sudo umount "${ROOTFS2_MNT}/var/cache/apt/archives" 2>/dev/null || true
+    sudo umount "${ROOTFS2_MNT}/var/lib/apt/lists"      2>/dev/null || true
+    sudo umount "${ROOTFS2_MNT}/sys"  2>/dev/null || true
+    sudo umount "${ROOTFS2_MNT}/proc" 2>/dev/null || true
+    sudo umount "${ROOTFS2_MNT}/dev"  2>/dev/null || true
     [ -f "${ROOTFS_MNT}/usr/bin/qemu-aarch64-static" ] && \
         sudo rm -f "${ROOTFS_MNT}/usr/bin/qemu-aarch64-static" || true
+    [ -f "${ROOTFS2_MNT}/usr/bin/qemu-aarch64-static" ] && \
+        sudo rm -f "${ROOTFS2_MNT}/usr/bin/qemu-aarch64-static" || true
+    sudo umount "${ROOTFS2_MNT}" 2>/dev/null || true
     sudo umount "${ROOTFS_MNT}" 2>/dev/null || true
 }
 trap cleanup EXIT
@@ -129,46 +141,44 @@ ensure_tools_in_rootfs() {
 echo "=== Running base systemtest deploy ==="
 "${WORKSPACE_ROOT}/platform/aarch64/qemu-gicv3/test/systemtest/trootfs_deploy.sh"
 
-# Step 2: mount rootfs again and deploy bench scripts + install tools
-echo "=== Mounting rootfs ==="
+# Step 2: mount rootfs1 and deploy zone0 bench scripts + install tools
+echo "=== Mounting rootfs1 ==="
 sudo mkdir -p "${ROOTFS_MNT}"
 sudo mount "${ROOTFS_EXT4}" "${ROOTFS_MNT}"
 
-# Step 3: install benchmarking tools via chroot (apt-get) — skip if already present
-if [ -f "${ROOTFS_MNT}/usr/bin/fio" ] && \
-   [ -f "${ROOTFS_MNT}/usr/bin/cyclictest" ] && \
-   [ -f "${ROOTFS_MNT}/usr/bin/stress-ng" ] && \
-   [ -f "${ROOTFS_MNT}/usr/bin/iperf3" ]; then
-    echo "=== Benchmarking tools already installed in rootfs, skipping apt install ==="
-else
-    echo "=== Installing benchmarking tools via chroot ==="
-    QEMU_STATIC="/usr/bin/qemu-aarch64-static"
-    if [ -f "$QEMU_STATIC" ]; then
-        sudo cp "$QEMU_STATIC" "${ROOTFS_MNT}/usr/bin/qemu-aarch64-static"
-    fi
-    sudo mount --bind /dev   "${ROOTFS_MNT}/dev"
-    sudo mount --bind /proc  "${ROOTFS_MNT}/proc"
-    sudo mount --bind /sys   "${ROOTFS_MNT}/sys"
-    sudo chroot "${ROOTFS_MNT}" sh -c \
-        "apt-get update && apt-get install -y --no-install-recommends fio rt-tests stress-ng iperf3 iproute2"
-    sudo umount "${ROOTFS_MNT}/sys"
-    sudo umount "${ROOTFS_MNT}/proc"
-    sudo umount "${ROOTFS_MNT}/dev"
-    sudo rm -f "${ROOTFS_MNT}/usr/bin/qemu-aarch64-static"
-    echo "=== chroot install done ==="
-fi
+ensure_tools_in_rootfs "${ROOTFS_MNT}"
 
-# Step 4: deploy bench scripts into guest
-echo "=== Deploying perf bench scripts ==="
+# Step 3: deploy zone0 bench scripts into rootfs1
+echo "=== Deploying zone0 perf scripts to rootfs1 ==="
 BENCH_DEST="${ROOTFS_MNT}/home/arm64/test/bench"
 sudo mkdir -p "${BENCH_DEST}"
-sudo cp -v "${PERF_DIR}"/bench_*.sh "${BENCH_DEST}/"
+sudo cp -v "${PERF_DIR}/bench_mem.sh" "${PERF_DIR}/bench_irq.sh" "${PERF_DIR}/bench_net.sh" "${BENCH_DEST}/"
 sudo chmod +x "${BENCH_DEST}"/bench_*.sh
 sudo mkdir -p "${ROOTFS_MNT}/home/arm64/test/perfresult"
 
-echo "=== Bench scripts deployed ==="
+echo "=== rootfs1 perf scripts deployed ==="
 sudo find "${ROOTFS_MNT}/home/arm64/test" -ls
 
+# Step 4: mount rootfs2 image from inside rootfs1
+resolve_rootfs2_in_rootfs1
+# Expand rootfs2 before mounting if free space is insufficient for apt install
+expand_ext2_if_needed "${ROOTFS2_IN_ROOTFS1}"
+echo "=== Mounting rootfs2 (embedded in rootfs1) ==="
+sudo mkdir -p "${ROOTFS2_MNT}"
+sudo mount "${ROOTFS2_IN_ROOTFS1}" "${ROOTFS2_MNT}"
+
+# Step 5: deploy zone1 blk script + install tools into embedded rootfs2
+echo "=== Installing tools and deploying zone1 blk perf script to rootfs2 ==="
+
+ensure_tools_in_rootfs "${ROOTFS2_MNT}" optional
+
+sudo mkdir -p "${ROOTFS2_MNT}/home/arm64/test/bench"
+sudo mkdir -p "${ROOTFS2_MNT}/home/arm64/test/perfresult"
+sudo cp -v "${PERF_DIR}/bench_blk.sh" "${ROOTFS2_MNT}/home/arm64/test/bench/"
+sudo chmod +x "${ROOTFS2_MNT}/home/arm64/test/bench/bench_blk.sh"
+sudo find "${ROOTFS2_MNT}/home/arm64/test" -ls
+
+sudo umount "${ROOTFS2_MNT}"
 sudo umount "${ROOTFS_MNT}"
 trap - EXIT
 echo "=== perftest rootfs deploy done ==="

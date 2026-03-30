@@ -158,11 +158,11 @@ ensure_tools_in_rootfs "${ROOTFS_MNT}"
 echo "=== Deploying zone0 perf bench scripts ==="
 BENCH_DEST="${ROOTFS_MNT}/home/riscv64/test/bench"
 sudo mkdir -p "${BENCH_DEST}"
-sudo cp -v "${PERF_DIR}"/bench_*.sh "${BENCH_DEST}/"
+sudo cp -v "${PERF_DIR}/bench_mem.sh" "${PERF_DIR}/bench_irq.sh" "${PERF_DIR}/bench_net.sh" "${BENCH_DEST}/"
 sudo chmod +x "${BENCH_DEST}"/bench_*.sh
 sudo mkdir -p "${ROOTFS_MNT}/home/riscv64/test/perfresult"
 
-echo "=== Bench scripts deployed ==="
+echo "=== rootfs1 perf scripts deployed ==="
 sudo find "${ROOTFS_MNT}/home/riscv64/test" -ls
 
 # Step 5: mount rootfs2 and deploy zone1 blk bench script + install tools
