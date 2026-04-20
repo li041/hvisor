@@ -220,14 +220,11 @@ pub fn vgicv3_redist_handler(mmio: &mut MMIOAccess, cpu: usize) -> HvResult {
             } else {
                 if mmio.is_write {
                     set_prop_baser(mmio.value);
+                    trace!("write prop tbl base : 0x{:x}!", mmio.value);
                 } else {
                     mmio.value = read_prop_baser();
+                    trace!("read prop tbl base : 0x{:x}", mmio.value);
                 }
-            }
-            if mmio.is_write {
-                trace!("write prop tbl base : 0x{:x}!", mmio.value);
-            } else {
-                trace!("read prop tbl base : 0x{:x}", mmio.value);
             }
         }
         GICR_SYNCR => {
