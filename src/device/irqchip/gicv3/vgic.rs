@@ -212,12 +212,21 @@ pub fn vgicv3_redist_handler(mmio: &mut MMIOAccess, cpu: usize) -> HvResult {
         }
         GICR_PROPBASER => {
             // all the redist share one prop tbl
-            // mmio_perform_access(gicr_base, mmio);
+            if this_zone_id() == 0 {
+                // Root zone: forward PROPBASER to hardware so that root Linux's
+                // LPI property table takes effect. This is essential for MSI/MSI-X
+                // interrupts (e.g. NVMe) routed through ITS → LPI.
+                mmio_perform_access(gicr_base, mmio);
+            } else {
+                if mmio.is_write {
+                    set_prop_baser(mmio.value);
+                } else {
+                    mmio.value = read_prop_baser();
+                }
+            }
             if mmio.is_write {
-                set_prop_baser(mmio.value);
                 trace!("write prop tbl base : 0x{:x}!", mmio.value);
             } else {
-                mmio.value = read_prop_baser();
                 trace!("read prop tbl base : 0x{:x}", mmio.value);
             }
         }

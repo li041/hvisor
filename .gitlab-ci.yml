@@ -1,0 +1,56 @@
+include:
+  - project: "infra/gitlab-cicd"
+    file: "/templates/rust.yml"
+
+variables:
+  CARGO_BUILD_TARGET_DIR: "${CI_PROJECT_DIR}/target"
+
+build:
+  stage: build
+  extends:
+    - .rust.build
+  script:
+    - !reference [.rust.build, script]
+    - |
+      echo "APT::Get::Assume-Yes \"true\";" >> /etc/apt/apt.conf
+      apt update && apt install --no-install-recommends jq sudo binutils-aarch64-linux-gnu
+      cargo +`rustup default | cut -f1 -d' '` install toml-cli cargo-binutils
+      rustup target add aarch64-unknown-none
+
+      RUST_VERSION=$(toml get -r rust-toolchain.toml toolchain.channel) && \
+      Components=$(toml get -r rust-toolchain.toml toolchain.components | jq -r 'join(" ")') && \
+      rustup install $RUST_VERSION && \
+      rustup component add --toolchain $RUST_VERSION $Components
+
+      make BID=aarch64/rk3588 L0G=info
+      # make BID=aarch64/rk3588 L0G=trace all
+      make BID=aarch64/rk3588 gen-fit
+
+  artifacts:
+    paths:
+      - ${CI_PROJECT_DIR}/fitImage
+
+trigger_sdk_job:
+  stage: deploy
+  script:
+    - |
+      curl -X POST \
+        -F token=${CI_JOB_TOKEN} \
+        -F ref=main \
+        -F "inputs[job-name]=hyper-build" \
+        -F "inputs[hyper-version]=${CI_COMMIT_REF_SLUG}" \
+        -F "inputs[hyper-need]=[{\"project\": \"${CI_PROJECT_PATH}\", \"job\": \"build\", \"ref\": \"${CI_MERGE_REQUEST_REF_PATH:-${CI_COMMIT_REF_NAME}}\", \"artifacts\": true}]" \
+        -F "inputs[hyper-img-path]=fitImage"  \
+        "${CI_API_V4_URL}/projects/286/trigger/pipeline" || exit 1
+  # trigger:
+  #   project: "rnd/os/rk3588-sdk-patch"
+  #   branch: ci
+  #   inputs:
+  #     job-name: "hyper-build"
+  #     hyper-version: "${CI_COMMIT_REF_SLUG}"
+  #     hyper-need:
+  #       - project: "${CI_PROJECT_PATH}"
+  #         job: "build"
+  #         ref: "${CI_MERGE_REQUEST_REF_PATH:-${CI_COMMIT_REF_NAME}}"
+  #         artifacts: true
+  #     hyper-img-path: "fitImage"

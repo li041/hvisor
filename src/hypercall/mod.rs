@@ -24,11 +24,16 @@ use crate::device::virtio_trampoline::{MAX_DEVS, VIRTIO_BRIDGE, VIRTIO_IRQS};
 use crate::error::HvResult;
 use crate::pci::pci_config::GLOBAL_PCIE_LIST;
 use crate::zone::{
-    add_zone, all_zones_info, find_zone, is_this_root_zone, remove_zone, zone_create, ZoneInfo,
+    add_zone, all_zones_info, find_zone, is_this_root_zone, remove_zone, this_zone_id, zone_create, ZoneInfo
 };
 
 use crate::event::{send_event, IPI_EVENT_SHUTDOWN, IPI_EVENT_VIRTIO_INJECT_IRQ, IPI_EVENT_WAKEUP};
 use core::convert::TryFrom;
+use core::sync::atomic::{fence, Ordering};
+
+#[cfg(target_arch = "aarch64")]
+use crate::ivc::{cleanup_zone_ivc, IvcInfo, IVC_INFOS};
+
 use numeric_enum_macro::numeric_enum;
 
 numeric_enum! {
@@ -208,7 +213,12 @@ impl<'a> HyperCall<'a> {
             error!("hv_zone_start: cpu {} already on", boot_cpu);
             return hv_result_err!(EBUSY);
         };
-        self.check_cpu_id();
+        #[cfg(target_arch = "loongarch64")]
+        {
+            // assert this is cpu 0
+            let cpuid = this_cpu_id();
+            assert_eq!(cpuid, 0);
+        }
         add_zone(zone);
         drop(_lock);
         HyperCallResult::Ok(0)
@@ -283,6 +293,10 @@ impl<'a> HyperCall<'a> {
         }
         drop(pci_list);
 
+        
+        // Clean up IVC records and info for this zone before removing it
+        cleanup_zone_ivc(zone_id as _);
+        
         remove_zone(zone_id as _);
         info!("zone {} has been shutdown", zone_id);
         HyperCallResult::Ok(0)

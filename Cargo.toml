@@ -75,10 +75,16 @@ pl011 = []
 xuartps = []
 imx_uart = []
 uart_16550 = []
-sifive_ccache = []
-eic7700_sysreg = []
-uart16550a = []
-
+# functionality
+iommu = []
+pci = []
+# pagetable layout
+pt_layout_qemu = []
+pt_layout_rk3568 = []
+# cpu 
+a55 = []
+a53 = []
+rk3568_uart_base = []
 ############## riscv64 #############
 # irqchip driver
 plic = []
@@ -106,4 +112,4 @@ split_screen = []
 [profile.dev]
 # panic = "abort" # avoid cargo test failure, this is a bug of cargo
 debug = 2
-opt-level = 0 
+# panic = "abort"

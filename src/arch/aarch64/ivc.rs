@@ -131,6 +131,44 @@ struct PeerInfo {
     shared_mem_ipa: u64,
 }
 
+/// Clean up IVC records and info for a zone that is being shut down.
+/// This removes the zone from IVC_INFOS and removes all peer entries
+/// for this zone from IVC_RECORDS.
+pub fn cleanup_zone_ivc(zone_id: usize) {
+    info!("cleanup IVC for zone {}", zone_id);
+    
+    // Remove from IVC_INFOS
+    let mut ivc_infos = IVC_INFOS.lock();
+    ivc_infos.remove(&zone_id);
+    drop(ivc_infos);
+    
+    // Remove peer entries from IVC_RECORDS
+    let mut recs = IVC_RECORDS.lock();
+    let zone_id_u32 = zone_id as u32;
+    
+    // Collect ivc_ids and peer_ids to remove (to avoid borrow checker issues)
+    let mut to_remove: Vec<(u32, u32)> = Vec::new();
+    
+    for (ivc_id, rec) in recs.iter() {
+        for (peer_id, peer_info) in rec.peer_infos.iter() {
+            if peer_info.zone_id == zone_id_u32 {
+                to_remove.push((*ivc_id, *peer_id));
+            }
+        }
+    }
+    
+    // Remove the collected peer entries
+    for (ivc_id, peer_id) in to_remove {
+        if let Some(rec) = recs.get_mut(&ivc_id) {
+            rec.peer_infos.remove(&peer_id);
+            info!("removed peer_id {} (zone_id {}) from ivc_id {}", peer_id, zone_id, ivc_id);
+        }
+    }
+    
+    drop(recs);
+    info!("IVC cleanup completed for zone {}", zone_id);
+}
+
 impl From<&HvIvcConfig> for IvcRecord {
     fn from(config: &HvIvcConfig) -> Self {
         let frames = Frame::new_contiguous(

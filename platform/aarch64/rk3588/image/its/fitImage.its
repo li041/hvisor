@@ -1,0 +1,46 @@
+/dts-v1/;
+/ {
+    description = "FIT image for HVISOR with Linux kernel, root filesystem, and DTB";
+
+    images {
+        root_linux {
+            description = "Linux kernel";
+            data = /incbin/("__ROOT_LINUX_IMAGE__");
+            type = "kernel";
+            arch = "arm64";
+            os = "linux";
+            compression = "none";
+            load = <0x09400000>;
+            entry = <0x09400000>;
+        };
+
+        root_dtb {
+            description = "Device Tree Blob";
+            data = /incbin/("__ROOT_LINUX_DTB__");
+            type = "flat_dt";
+            arch = "arm64";
+            compression = "none";
+            load = <0x10000000>;
+        };
+
+        hvisor {
+            description = "Hypervisor";
+            data = /incbin/("__HVISOR_TMP_PATH__");
+            type = "kernel";
+            arch = "arm64";
+            os = "linux";
+            compression = "none";
+            load = <0x00500000>;
+            entry = <0x00500000>;
+        };
+    };
+
+    configurations {
+        default = "conf";
+        conf {
+            description = "default";
+            kernel = "hvisor";
+            fdt = "root_dtb";
+        };
+    };
+};

@@ -6,7 +6,6 @@ SECTIONS
 {
     . = BASE_ADDRESS;
     skernel = .;
-
     .boot : {
         *(.text.boot)
         *(.data.boot)
