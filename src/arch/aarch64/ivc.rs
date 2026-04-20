@@ -15,6 +15,7 @@
 //
 
 use alloc::collections::btree_map::BTreeMap;
+use alloc::vec::Vec;
 use spin::Mutex;
 
 use crate::device::irqchip::set_ispender;
