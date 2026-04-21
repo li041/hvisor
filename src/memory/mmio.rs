@@ -107,6 +107,15 @@ pub fn mmio_handle_access(mmio: &mut MMIOAccess) -> HvResult {
         }
         None => {
             warn!("Zone {} unhandled mmio fault {:#x?}", zone_id, mmio);
+            // Guest RAM often does not cover GPA 0; stray readl/writel to IPA in the first
+            // page then traps here. Discard writes and return 0 on reads instead of
+            // failing the root zone (NULL __iomem / bad DT / bring-up holes).
+            if mmio.address < super::PAGE_SIZE {
+                if !mmio.is_write {
+                    mmio.value = 0;
+                }
+                return Ok(());
+            }
             hv_result_err!(EINVAL)
         }
     }
