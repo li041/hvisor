@@ -51,7 +51,7 @@ pub fn platform_root_zone_config() -> HvZoneConfig {
     );
     memory_regions[..ROOT_ZONE_MEMORY_REGIONS.len()].copy_from_slice(&ROOT_ZONE_MEMORY_REGIONS);
 
-    let mut ivc_configs: [HvIvcConfig; 2] = [HvIvcConfig::default(); CONFIG_MAX_IVC_CONFIGS];
+    let mut ivc_configs: [HvIvcConfig; 6] = [HvIvcConfig::default(); CONFIG_MAX_IVC_CONFIGS];
     let mut _num_ivc_configs = 0;
 
     #[cfg(target_arch = "aarch64")]
