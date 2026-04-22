@@ -30,7 +30,7 @@ use crate::zone::{
 use crate::event::{send_event, IPI_EVENT_SHUTDOWN, IPI_EVENT_VIRTIO_INJECT_IRQ, IPI_EVENT_WAKEUP};
 use core::convert::TryFrom;
 
-#[cfg(target_arch = "aarch64")]
+#[cfg(any(target_arch = "aarch64", target_arch = "loongarch64"))]
 use crate::arch::ivc::cleanup_zone_ivc;
 
 use numeric_enum_macro::numeric_enum;
@@ -293,7 +293,7 @@ impl<'a> HyperCall<'a> {
         drop(pci_list);
 
         // Clean up IVC records and info for this zone before removing it
-        #[cfg(target_arch = "aarch64")]
+        #[cfg(any(target_arch = "aarch64", target_arch = "loongarch64"))]
         cleanup_zone_ivc(zone_id as _);
 
         remove_zone(zone_id as _);
