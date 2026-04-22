@@ -693,6 +693,9 @@ impl Zone {
     }
 
     pub fn arch_zone_pre_configuration(&mut self, config: &HvZoneConfig) -> HvResult {
+        if !config.ivc_config().is_empty() {
+            self.ivc_init(config.ivc_config())?;
+        }
         Ok(())
     }
 
