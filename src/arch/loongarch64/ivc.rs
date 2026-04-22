@@ -3,8 +3,9 @@
 //
 // LoongArch64 IVC（Inter-VM Communication）第一版：
 // - 与 `arch/aarch64/ivc.rs` 在「配置、共享内存、控制表 MMIO 布局」上对齐，便于同一套 guest 协议。
-// - 「通知对端 peer」在 AArch64 上通过 GIC `set_ispender` 实现；龙芯无 GIC，此处 **仅打日志并返回 Ok**，
-//   后续步骤再在本分支接入 `send_event`、EXTIOI 虚拟中断等（你按节奏加即可）。
+// - 「通知对端 peer」在 AArch64 上通过 GIC `set_ispender` 实现；本分支在目标 peer 的 pCPU 上
+//   先记录待注 guest 中断线，再 `send_event(..., IPI_EVENT_IVC)`，由 `check_events` →
+//   `loongarch_ivc_on_ipi_event` → `inject_irq` 完成唤醒（>INT_IPI 的线号暂以 IPI 唤醒，EXTIOI 可后续接）。
 
 use alloc::collections::btree_map::BTreeMap;
 use alloc::vec::Vec;
@@ -12,10 +13,12 @@ use spin::Mutex;
 
 use crate::{
     config::{HvIvcConfig, CONFIG_MAX_IVC_CONFIGS},
-    consts::PAGE_SIZE,
+    consts::{IPI_EVENT_IVC, PAGE_SIZE},
+    device::irqchip::ls7a2000::loongarch_ivc_set_pending_guest_irq_for_pcpu,
     error::HvResult,
+    event::send_event,
     memory::{Frame, GuestPhysAddr, MMIOAccess, MemFlags, MemoryRegion},
-    zone::{this_zone_id, Zone},
+    zone::{find_zone, this_zone_id, Zone},
 };
 
 // -------- 全局表：与 AArch64 相同的设计 --------
@@ -219,6 +222,26 @@ impl Zone {
     }
 }
 
+fn loongarch_ivc_deliver_to_peer(target_zone_id: u32, guest_irq: u32) -> HvResult {
+    let Some(z) = find_zone(target_zone_id as usize) else {
+        error!("ivc: target zone {} not found for IPI_INVOKE", target_zone_id);
+        return hv_result_err!(EINVAL);
+    };
+    let Some(pcpu) = z.cpu_set().first_cpu() else {
+        error!("ivc: zone {} has no pcpu in cpu_set", target_zone_id);
+        return hv_result_err!(EINVAL);
+    };
+    loongarch_ivc_set_pending_guest_irq_for_pcpu(pcpu, guest_irq);
+    trace!(
+        "ivc: IPI_INVOKE -> zone {} pcpu {} guest_irq {}",
+        target_zone_id,
+        pcpu,
+        guest_irq
+    );
+    send_event(pcpu, 0, IPI_EVENT_IVC);
+    Ok(())
+}
+
 // -------- 控制表布局（与 AArch64 相同，偏移相对 control table 页内） --------
 
 const CT_IVC_ID: GuestPhysAddr = 0x00;
@@ -239,6 +262,22 @@ pub fn mmio_ivc_handler(mmio: &mut MMIOAccess, base: usize) -> HvResult {
         .map(|i| ivc_info.ivc_ids[i])
         .unwrap();
     drop(ivc_infos);
+    if mmio.address == CT_IPI_INVOKE && is_write {
+        let peer_id = mmio.value as u32;
+        let recs = IVC_RECORDS.lock();
+        let Some(rec) = recs.get(&ivc_id) else {
+            drop(recs);
+            return hv_result_err!(EINVAL);
+        };
+        let out = rec.peer_infos.get(&peer_id).map(|i| (i.zone_id, i.irq_num));
+        drop(recs);
+        let Some((target_zone, guest_irq)) = out else {
+            error!("zone {} has no peer {}", zone_id, peer_id);
+            return hv_result_err!(EINVAL);
+        };
+        return loongarch_ivc_deliver_to_peer(target_zone, guest_irq);
+    }
+
     let recs = IVC_RECORDS.lock();
     let rec = recs.get(&ivc_id).unwrap();
     mmio.value = match mmio.address {
@@ -254,19 +293,6 @@ pub fn mmio_ivc_handler(mmio: &mut MMIOAccess, base: usize) -> HvResult {
                 .map(|(pid, _)| *pid)
                 .unwrap();
             peer_id as usize
-        }
-        CT_IPI_INVOKE if is_write => {
-            let peer_id = mmio.value as u32;
-            let Some(info) = rec.peer_infos.get(&peer_id) else {
-                error!("zone {} has no peer {}", zone_id, peer_id);
-                return hv_result_err!(EINVAL);
-            };
-            // TODO(LoongArch): 在这里把「对端 zone / irq」转成实际注入（见文件头说明）
-            warn!(
-                "loongarch64 IVC: IPI_INVOKE peer_id={} -> zone {} guest_irq {} (notify stub)",
-                peer_id, info.zone_id, info.irq_num
-            );
-            return Ok(());
         }
         _ => return hv_result_err!(EFAULT),
     };

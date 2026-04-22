@@ -17,7 +17,8 @@
 use crate::{
     arch::ipi::{arch_check_events, arch_prepare_send_event, arch_send_event},
     consts::{
-        IPI_EVENT_CLEAR_INJECT_IRQ, IPI_EVENT_SEND_IPI, IPI_EVENT_UPDATE_HART_LINE, MAX_CPU_NUM,
+        IPI_EVENT_CLEAR_INJECT_IRQ, IPI_EVENT_IVC, IPI_EVENT_SEND_IPI, IPI_EVENT_UPDATE_HART_LINE,
+        MAX_CPU_NUM,
     },
     cpu_data::this_cpu_data,
     device::{irqchip::inject_irq, virtio_trampoline::handle_virtio_irq},
@@ -107,6 +108,12 @@ pub fn check_events() -> bool {
         | Some(IPI_EVENT_UPDATE_HART_LINE)
         | Some(IPI_EVENT_SEND_IPI) => {
             arch_check_events(event);
+            true
+        }
+        #[cfg(target_arch = "loongarch64")]
+        Some(IPI_EVENT_IVC) => {
+            use crate::device::irqchip::ls7a2000::loongarch_ivc_on_ipi_event;
+            loongarch_ivc_on_ipi_event();
             true
         }
         // #[cfg(target_arch = "loongarch64")]
