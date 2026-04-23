@@ -15,6 +15,7 @@
 //      Yulong Han <wheatfox17@icloud.com>
 //
 use crate::arch::cpu::this_cpu_id;
+use crate::consts::IPI_EVENT_CLEAR_INJECT_IRQ;
 use crate::device::common::MMIODerefWrapper;
 use core::arch::asm;
 use core::ptr::write_volatile;
@@ -71,6 +72,7 @@ register_structs! {
 
 const MMIO_BASE: usize = 0x8000_0000_1fe0_0000;
 const IPI_MMIO_BASE: usize = MMIO_BASE;
+const IPI_ANY_SEND_BASE: usize = MMIO_BASE + 0x1158;
 
 // IPI registers, use this if you don't want to use the percore-IPI feature
 pub static CORE0_IPI: MMIODerefWrapper<IpiRegisters> =
@@ -339,5 +341,27 @@ pub fn dump_ipi_registers() {
         ipi.mailbox1.read(Mailbox1::MAILBOX1),
         ipi.mailbox2.read(Mailbox2::MAILBOX2),
         ipi.mailbox3.read(Mailbox3::MAILBOX3)
+    );
+}
+
+pub fn arch_check_events(event: Option<usize>) {
+    match event {
+        Some(IPI_EVENT_CLEAR_INJECT_IRQ) => {
+            // clear the injected IPI interrupt
+            use crate::device::irqchip::ls7a2000::clear_hwi_injected_irq;
+            clear_hwi_injected_irq();
+        }
+        _ => {
+            panic!("arch_check_events: unhandled event: {:?}", event);
+        }
+    }
+}
+
+pub fn arch_prepare_send_event(cpu_id: usize, ipi_int_id: usize, event_id: usize) {
+    use crate::event::fetch_event;
+    while !fetch_event(cpu_id).is_none() {}
+    debug!(
+        "loongarch64:: send_event: cpu_id: {}, ipi_int_id: {}, event_id: {}",
+        cpu_id, ipi_int_id, event_id
     );
 }

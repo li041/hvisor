@@ -1,6 +1,4 @@
 gicv2
 pl011
-iommu
+arm_smmu
 pci
-pt_layout_qemu
-a53

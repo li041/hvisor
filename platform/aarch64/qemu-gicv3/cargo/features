@@ -1,6 +1,5 @@
 gicv3
 pl011
-iommu
+arm_smmu
 pci
-pt_layout_qemu
-a53
+ecam_pcie

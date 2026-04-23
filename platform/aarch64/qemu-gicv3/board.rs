@@ -13,9 +13,41 @@
 //
 // Authors:
 //
-use crate::{arch::zone::HvArchZoneConfig, config::*};
+use crate::{
+    arch::{
+        mmu::MemoryType,
+        zone::{GicConfig, Gicv3Config, HvArchZoneConfig},
+    },
+    config::*,
+    pci::vpci_dev::VpciDevType,
+};
 
-pub const BOARD_NAME: &str = "qemu-givc3";
+use crate::pci_dev;
+
+#[allow(unused)]
+pub const BOARD_NAME: &str = "qemu-gicv3";
+
+pub const BOARD_NCPUS: usize = 4;
+pub const BOARD_UART_BASE: u64 = 0x9000000;
+
+#[rustfmt::skip]
+pub static BOARD_MPIDR_MAPPINGS: [u64; BOARD_NCPUS] = [
+    0x0,   // cpu0
+    0x1,   // cpu1
+    0x2,   // cpu2
+    0x3,   // cpu3
+];
+
+/// The physical memory layout of the board.
+/// Each address should align to 2M (0x200000).
+/// Addresses must be in ascending order.
+#[rustfmt::skip]
+pub const BOARD_PHYSMEM_LIST: &[(u64, u64, MemoryType)] = &[
+ // (       start,           end,                type)
+    (         0x0,    0x10000000,  MemoryType::Device),
+    (  0x40000000,   0x100000000,  MemoryType::Normal),
+    (0x4010000000,  0x4020000000,  MemoryType::Device),
+];
 
 pub const ROOT_ZONE_DTB_ADDR: u64 = 0xa0000000;
 pub const ROOT_ZONE_KERNEL_ADDR: u64 = 0xa0400000;
@@ -24,7 +56,7 @@ pub const ROOT_ZONE_CPUS: u64 = (1 << 0) | (1 << 1);
 
 pub const ROOT_ZONE_NAME: &str = "root-linux";
 
-pub const ROOT_ZONE_MEMORY_REGIONS: [HvConfigMemoryRegion; 3] = [
+pub const ROOT_ZONE_MEMORY_REGIONS: &[HvConfigMemoryRegion] = &[
     HvConfigMemoryRegion {
         mem_type: MEM_TYPE_RAM,
         physical_start: 0x50000000,
@@ -45,27 +77,25 @@ pub const ROOT_ZONE_MEMORY_REGIONS: [HvConfigMemoryRegion; 3] = [
     }, // virtio
 ];
 
+pub const IRQ_WAKEUP_VIRTIO_DEVICE: usize = 32 + 0x20;
 // 35 36 37 38 -> pcie intx#
 // 65 -> ivc
-pub const ROOT_ZONE_IRQS: [u32; 9] = [33, 64, 77, 79, 35, 36, 37, 38, 65];
+pub const ROOT_ZONE_IRQS_BITMAP: &[BitmapWord] =
+    &get_irqs_bitmap(&[33, 64, 77, 79, 35, 36, 37, 38, 65]);
 
 pub const ROOT_ARCH_ZONE_CONFIG: HvArchZoneConfig = HvArchZoneConfig {
-    gicd_base: 0x8000000,
-    gicd_size: 0x10000,
-    gicr_base: 0x80a0000,
-    gicr_size: 0xf60000,
-    gicc_base: 0x8010000,
-    gicc_size: 0x10000,
-    gicc_offset: 0x0,
-    gich_base: 0x8030000,
-    gich_size: 0x10000,
-    gicv_base: 0x8040000,
-    gicv_size: 0x10000,
-    gits_base: 0x8080000,
-    gits_size: 0x20000,
+    is_aarch32: 0,
+    gic_config: GicConfig::Gicv3(Gicv3Config {
+        gicd_base: 0x8000000,
+        gicd_size: 0x10000,
+        gicr_base: 0x80a0000,
+        gicr_size: 0xf60000,
+        gits_base: 0x8080000,
+        gits_size: 0x20000,
+    }),
 };
 
-pub const ROOT_PCI_CONFIG: HvPciConfig = HvPciConfig {
+pub const ROOT_PCI_CONFIG: [HvPciConfig; 1] = [HvPciConfig {
     ecam_base: 0x4010000000,
     ecam_size: 0x10000000,
     io_base: 0x3eff0000,
@@ -77,8 +107,16 @@ pub const ROOT_PCI_CONFIG: HvPciConfig = HvPciConfig {
     mem64_base: 0x8000000000,
     mem64_size: 0x8000000000,
     pci_mem64_base: 0x8000000000,
-};
+    bus_range_begin: 0,
+    bus_range_end: 0xff,
+    domain: 0x0,
+}];
 
 pub const ROOT_ZONE_IVC_CONFIG: [HvIvcConfig; 0] = [];
 
-pub const ROOT_PCI_DEVS: [u64; 2] = [0, 1 << 3];
+pub const ROOT_PCI_DEVS: &[HvPciDevConfig] = &[
+    pci_dev!(0x0, 0x0, 0x0, 0x0, VpciDevType::Physical),
+    pci_dev!(0x0, 0x0, 0x1, 0x0, VpciDevType::Physical),
+    // pci_dev!(0x0, 0x0, 0x3, 0x0, VpciDevType::Physical),
+    pci_dev!(0x0, 0x0, 0x5, 0x0, VpciDevType::StandardVdev),
+];

@@ -24,11 +24,11 @@ use crate::{
         cpu::mpidr_to_cpuid,
         sysreg::{read_sysreg, write_sysreg},
     },
+    cpu_data::{get_cpu_data, this_cpu_data, this_zone},
     device::irqchip::gic_handle_irq,
     event::{send_event, IPI_EVENT_SHUTDOWN, IPI_EVENT_WAKEUP},
     hypercall::{HyperCall, SGI_IPI_ID},
     memory::{mmio_handle_access, MMIOAccess},
-    percpu::{get_cpu_data, this_cpu_data, this_zone, PerCpu},
     zone::{is_this_root_zone, remove_zone},
 };
 
@@ -45,6 +45,8 @@ pub mod ExceptionType {
     pub const EXIT_REASON_EL2_IRQ: u64 = 0x1;
     pub const EXIT_REASON_EL1_ABORT: u64 = 0x2;
     pub const EXIT_REASON_EL1_IRQ: u64 = 0x3;
+    pub const EXIT_REASON_EL1_AARCH32_ABORT: u64 = 0x4;
+    pub const EXIT_REASON_EL1_AARCH32_IRQ: u64 = 0x5;
 }
 const SMC_TYPE_MASK: u64 = 0x3F000000;
 #[allow(non_snake_case)]
@@ -59,6 +61,8 @@ pub mod SmcType {
 const PSCI_VERSION_1_1: u64 = 0x10001;
 const PSCI_TOS_NOT_PRESENT_MP: u64 = 2;
 const ARM_SMCCC_VERSION_1_1: u64 = 0x10001;
+
+#[allow(unused)]
 const ARM_SMCCC_NOT_SUPPORTED: i64 = -1;
 
 extern "C" {
@@ -107,8 +111,12 @@ pub fn arch_handle_exit(regs: &mut GeneralRegisters) -> ! {
     let _cpu_id = mpidr_to_cpuid(mpidr);
     trace!("cpu exit, exit_reson:{:#x?}", regs.exit_reason);
     match regs.exit_reason as u64 {
-        ExceptionType::EXIT_REASON_EL1_IRQ => irqchip_handle_irq1(),
-        ExceptionType::EXIT_REASON_EL1_ABORT => arch_handle_trap_el1(regs),
+        ExceptionType::EXIT_REASON_EL1_IRQ | ExceptionType::EXIT_REASON_EL1_AARCH32_IRQ => {
+            irqchip_handle_irq1()
+        }
+        ExceptionType::EXIT_REASON_EL1_ABORT | ExceptionType::EXIT_REASON_EL1_AARCH32_ABORT => {
+            arch_handle_trap_el1(regs)
+        }
         ExceptionType::EXIT_REASON_EL2_ABORT => arch_handle_trap_el2(regs),
         ExceptionType::EXIT_REASON_EL2_IRQ => irqchip_handle_irq2(),
         _ => arch_dump_exit(regs.exit_reason),
@@ -178,18 +186,15 @@ fn arch_handle_trap_el2(_regs: &mut GeneralRegisters) {
             );
         }
         _ => {
-           println!(
+            println!(
                 "Unhandled EL2 Exception: EC={:#x?}",
                 ESR_EL2.read(ESR_EL2::EC)
             );
-            
         }
-        
     }
     
     loop {
         println!("died foreever");
-
     }
    
 }
@@ -201,16 +206,16 @@ fn handle_iabt(_regs: &mut GeneralRegisters) {
     let far = read_sysreg!(FAR_EL2);
     let address = (far & 0xfff) | (hpfar << 8);
     error!(
-        "error ins access {} at {:#x?}, elr_el2={:#x?}!",
+        "Failed to fetch instruction (op={}) at {:#x?}, ELR_EL2={:#x?}!",
         op,
         address,
         ELR_EL2.get()
     );
-    error!("esr_el2: iss {:#x?}", iss);
     loop {}
-    //TODO finish iabt handle
+    // TODO: finish iabt handle
     // arch_skip_instruction(frame);
 }
+
 fn handle_dabt(regs: &mut GeneralRegisters) {
     let iss = ESR_EL2.read(ESR_EL2::ISS);
     let is_write = (iss >> 6 & 0x1) != 0;
@@ -227,10 +232,10 @@ fn handle_dabt(regs: &mut GeneralRegisters) {
         address: address as _,
         size,
         is_write,
-        value: if srt == 31 {
-            0
-        } else {
+        value: if is_write && srt != 31 {
             regs.usr[srt as usize] as _
+        } else {
+            0
         },
     };
 
@@ -302,7 +307,6 @@ fn handle_hvc(regs: &mut GeneralRegisters) {
 
 fn handle_smc(regs: &mut GeneralRegisters) {
     let (code, arg0, arg1, arg2) = (regs.usr[0], regs.usr[1], regs.usr[2], regs.usr[3]);
-    let cpu_data = this_cpu_data() as &mut PerCpu;
     //info!(
     //    "SMC from CPU{}, func_id:{:#x?}, arg0:{:#x?}, arg1:{:#x?}, arg2:{:#x?}",
     //    cpu_data.id, code, arg0, arg1, arg2
@@ -310,14 +314,14 @@ fn handle_smc(regs: &mut GeneralRegisters) {
     let result = match code & SMC_TYPE_MASK {
         SmcType::ARCH_SC => handle_arch_smc(regs, code, arg0, arg1, arg2),
         SmcType::STANDARD_SC => handle_psci_smc(regs, code, arg0, arg1, arg2),
-        SmcType::TOS_SC_START..=SmcType::TOS_SC_END | SmcType::SIP_SC => unsafe {
+        SmcType::TOS_SC_START..=SmcType::TOS_SC_END | SmcType::SIP_SC => {
             let ret = smc_call(code, &regs.usr[1..18]);
             regs.usr[0] = ret[0];
             regs.usr[1] = ret[1];
             regs.usr[2] = ret[2];
             regs.usr[3] = ret[3];
             ret[0]
-        },
+        }
         _ => {
             warn!("unsupported smc {:#x?}", code);
             0
@@ -390,10 +394,10 @@ fn handle_psci_smc(
         PsciFnId::PSCI_CPU_ON_32 | PsciFnId::PSCI_CPU_ON_64 => psci_emulate_cpu_on(regs),
         PsciFnId::PSCI_SYSTEM_OFF => {
             let zone = this_zone();
-            let zone_id = zone.read().id;
+            let zone_id = zone.id();
             let is_root = is_this_root_zone();
 
-            for cpu_id in zone.read().cpu_set.iter_except(this_cpu_data().id) {
+            for cpu_id in zone.read().cpu_set().iter_except(this_cpu_data().id) {
                 let target_cpu = get_cpu_data(cpu_id);
                 let _lock = target_cpu.ctrl_lock.lock();
                 target_cpu.zone = None;

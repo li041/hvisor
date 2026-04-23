@@ -12,14 +12,53 @@
 //      https://www.syswonder.org
 //
 // Authors:
+//      Jingyu Liu <liujingyu24s@ict.ac.cn>
 //
-use sbi_rt::HartMask;
+use crate::consts::IPI_EVENT_SEND_IPI;
+#[cfg(feature = "plic")]
+use crate::consts::IPI_EVENT_UPDATE_HART_LINE;
+use crate::platform::BOARD_HARTID_MAP;
 
 // arch_send_event
 pub fn arch_send_event(cpu_id: u64, _sgi_num: u64) {
-    debug!("arch_send_event: cpu_id: {}", cpu_id);
+    let hart_id = BOARD_HARTID_MAP[cpu_id as usize];
+    debug!("arch_send_event: cpu_id: {}", hart_id);
     #[cfg(feature = "aclint")]
-    crate::device::irqchip::aclint::aclint_send_ipi(cpu_id as usize);
+    crate::device::irqchip::aclint::aclint_send_ipi(hart_id as usize);
     #[cfg(not(feature = "aclint"))]
-    sbi_rt::send_ipi(HartMask::from_mask_base(1 << cpu_id, 0));
+    {
+        let sbi_ret: sbi_rt::SbiRet =
+            sbi_rt::send_ipi(sbi_rt::HartMask::from_mask_base(1 << hart_id, 0));
+        if sbi_ret.is_err() {
+            error!("arch_send_event: send_ipi failed: {:?}", sbi_ret);
+        }
+    }
+}
+
+/// Handle send_ipi event.
+pub fn arch_ipi_handler() {
+    unsafe {
+        riscv_h::register::hvip::set_vssip();
+    }
+}
+
+pub fn arch_check_events(event: Option<usize>) {
+    match event {
+        #[cfg(feature = "plic")]
+        Some(IPI_EVENT_UPDATE_HART_LINE) => {
+            use crate::device::irqchip::plic::update_hart_line;
+            update_hart_line();
+        }
+        Some(IPI_EVENT_SEND_IPI) => {
+            use crate::arch::riscv64::ipi::arch_ipi_handler;
+            arch_ipi_handler();
+        }
+        _ => {
+            panic!("arch_check_events: unhandled event: {:?}", event);
+        }
+    }
+}
+
+pub fn arch_prepare_send_event(_cpu_id: usize, _ipi_int_id: usize, _event_id: usize) {
+    debug!("risc-v arch_prepare_send_event: do nothing now.")
 }

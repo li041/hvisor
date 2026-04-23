@@ -6,6 +6,9 @@
 /images/*
 /platform/*/*/image/kernel/*
 /platform/*/*/image/virtdisk/*
+/platform/*/*/image/bootloader/out
+/platform/*/*/image/iso/boot/kernel/*
+/platform/*/*/image/iso/boot/hvisor
 /platform/*/*/image/vmlinux
 /tools/hvisor
 /tmp
@@ -31,6 +34,7 @@ flash.img*
 compile.sh
 src/platform/__board.rs
 .config
-
+.cursorrules
+.vscode/extensions.json
 # systemtest
 rootfs1.zip*

@@ -14,6 +14,7 @@
 // Authors:
 //      Yulong Han <wheatfox17@icloud.com>
 //
+use crate::consts::PAGE_SIZE;
 use crate::error::{HvError, HvResult};
 use crate::memory::addr::is_aligned;
 use crate::memory::mapper::Mapper;
@@ -27,7 +28,7 @@ use loongArch64::register::pwcl::{
     set_dir1_base, set_dir1_width, set_dir2_base, set_dir2_width, set_ptbase, set_pte_width,
     set_ptwidth,
 };
-use loongArch64::register::stlbps::set_ps;
+use loongArch64::register::stlbps::{self, set_ps};
 use loongArch64::register::MemoryAccessType;
 use loongArch64::register::{crmd, pwch, pwcl, tlbrentry};
 use loongArch64::register::{pgd, pgdh, pgdl};
@@ -356,12 +357,10 @@ where
         Ok(p1e)
     }
 
-    fn map_page(
-        &mut self,
-        page: Page<VA>,
-        paddr: PhysAddr,
-        flags: MemFlags,
-    ) -> PagingResult<&mut PTE> {
+    fn map_page(&mut self, page: Page<VA>, paddr: PhysAddr, flags: MemFlags) -> PagingResult<()> {
+        // Record the number of intermediate tables before allocation to enable rollback on failure.
+        let intrm_tables_len_before = self.intrm_tables.len();
+
         trace!(
             "loongarch64: map_page: vaddr={:#x}, size={:?}, paddr={:#x}, flags={:?}",
             page.vaddr.into(),
@@ -369,8 +368,12 @@ where
             paddr,
             flags
         );
-        let entry: &mut PTE = self.get_entry_mut_or_create(page)?;
+
+        let entry = self.get_entry_mut_or_create(page)?;
         if !entry.is_unused() {
+            // Rollback before returning error (entry ref goes out of scope here).
+            let _ = entry;
+            self.intrm_tables.truncate(intrm_tables_len_before);
             return Err(PagingError::AlreadyMapped);
         }
         trace!("loongarch64: map_page: entry is unused, continue");
@@ -383,7 +386,7 @@ where
             entry.addr(),
             entry.flags()
         );
-        Ok(entry)
+        Ok(())
     }
 
     fn unmap_page(&mut self, vaddr: VA) -> PagingResult<(PhysAddr, PageSize)> {
@@ -490,6 +493,7 @@ where
         let _lock = self.clonee_lock.lock();
         let mut vaddr = region.start.into();
         let mut size = region.size;
+        let mut mapped_size = 0usize;
         while size > 0 {
             let paddr = region.mapper.map_fn(vaddr);
             let page_size = PageSize::Size4K; // now let's support STLB only
@@ -501,15 +505,34 @@ where
                 region.flags
             );
             let page = Page::new_aligned(vaddr.into(), page_size);
-            self.inner
-                .map_page(page, paddr, region.flags)
-                .map_err(|e: PagingError| {
-                    error!(
-                        "failed to map page: {:#x?}({:?}) -> {:#x?}, {:?}",
-                        vaddr, page_size, paddr, e
-                    );
-                    e
-                })?;
+            if let Err(map_err) = self.inner.map_page(page, paddr, region.flags) {
+                error!(
+                    "failed to map page: {:#x?}({:?}) -> {:#x?}, {:?}",
+                    vaddr, page_size, paddr, map_err
+                );
+                let mut rollback_vaddr = region.start.into();
+                let mut rollback_size = mapped_size;
+                while rollback_size > 0 {
+                    let (_, rollback_page_size) =
+                        self.inner.unmap_page(rollback_vaddr.into()).map_err(|rollback_err| {
+                            error!(
+                                "failed to rollback mapped page: {:#x?}, rollback error: {:?}, original map error: {:?}",
+                                rollback_vaddr, rollback_err, map_err
+                            );
+                            rollback_err
+                        })?;
+                    if !rollback_page_size.is_aligned(rollback_vaddr) {
+                        error!("rollback alignment error vaddr={:#x?}", rollback_vaddr);
+                        loop {}
+                    }
+                    assert!(rollback_page_size.is_aligned(rollback_vaddr));
+                    assert!(rollback_page_size as usize <= rollback_size);
+                    rollback_vaddr += rollback_page_size as usize;
+                    rollback_size -= rollback_page_size as usize;
+                }
+                return Err(map_err.into());
+            }
+            mapped_size += page_size as usize;
             vaddr += page_size as usize;
             size -= page_size as usize;
         }
@@ -621,7 +644,7 @@ fn next_table_mut_or_create<'a, E: GenericPTE>(
 }
 
 /// set pagetable format in loongarch64 as 4-level pagetable
-pub fn set_pwcl_pwch() {
+pub fn set_pwcl_pwch_stlbps() {
     set_dir3_base(12 + 9 + 9 + 9);
     set_dir3_width(9);
     set_dir2_base(12 + 9 + 9);
@@ -631,4 +654,5 @@ pub fn set_pwcl_pwch() {
     set_ptbase(12);
     set_ptwidth(9);
     set_pte_width(8); // 64 bits -> 8 bytes
+    stlbps::set_ps(12); // log2(real_page_size), 16KB -> 14, 4KB -> 12
 }

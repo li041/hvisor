@@ -14,6 +14,13 @@
 // Authors:
 //
 pub mod common;
+pub mod iommu;
 pub mod irqchip;
 pub mod uart;
 pub mod virtio_trampoline;
+
+#[cfg(feature = "eic7700_sysreg")]
+pub mod eic7700_syscrg;
+
+#[cfg(feature = "sifive_ccache")]
+pub mod sifive_ccache;

@@ -16,9 +16,12 @@
 use alloc::sync::Arc;
 
 use super::{gicd::GICD_LOCK, is_spi};
+use crate::platform::BOARD_MPIDR_MAPPINGS;
 use crate::{
-    arch::zone::HvArchZoneConfig,
-    consts,
+    arch::zone::{GicConfig, HvArchZoneConfig},
+    config::{BitmapWord, CONFIG_INTERRUPTS_BITMAP_BITS_PER_WORD, CONFIG_MAX_INTERRUPTS},
+    consts::MAX_CPU_NUM,
+    cpu_data::{get_cpu_data, this_zone},
     device::irqchip::gicv3::{
         gicd::*, gicr::*, gits::*, host_gicd_base, host_gicr_base, host_gits_base,
         MAINTENACE_INTERRUPT, PER_GICR_SIZE,
@@ -26,54 +29,85 @@ use crate::{
     error::HvResult,
     hypercall::SGI_IPI_ID,
     memory::{mmio_perform_access, MMIOAccess},
-    percpu::{get_cpu_data, this_zone},
     zone::{this_zone_id, Zone},
 };
-
 pub fn reg_range(base: usize, n: usize, size: usize) -> core::ops::Range<usize> {
-    base..(base + (n - 1) * size)
+    base..(base + n * size)
 }
 
 impl Zone {
     pub fn vgicv3_mmio_init(&mut self, arch: &HvArchZoneConfig) {
-        if arch.gicd_base == 0 || arch.gicr_base == 0 {
-            panic!("vgicv3_mmio_init: gicd_base or gicr_base is null");
-        }
+        let mut inner = self.write();
+        match arch.gic_config {
+            GicConfig::Gicv2(_) => {
+                panic!("vgicv3_mmio_init: GICv2 is not supported in this function");
+            }
+            GicConfig::Gicv3(ref gicv3_config) => {
+                // GICv3 specific initialization
+                info!("Initializing GICv3 MMIO regions for zone {}", self.id());
+                if gicv3_config.gicd_base == 0 || gicv3_config.gicr_base == 0 {
+                    panic!("vgicv3_mmio_init: gicd_base or gicr_base is null");
+                }
 
-        self.mmio_region_register(arch.gicd_base, arch.gicd_size, vgicv3_dist_handler, 0);
-        if arch.gits_base != 0 && arch.gits_size != 0 {
-            self.mmio_region_register(arch.gits_base, arch.gits_size, vgicv3_its_handler, 0);
-        }
+                inner.mmio_region_register(
+                    gicv3_config.gicd_base,
+                    gicv3_config.gicd_size,
+                    vgicv3_dist_handler,
+                    0,
+                );
+                inner.mmio_region_register(
+                    gicv3_config.gits_base,
+                    gicv3_config.gits_size,
+                    vgicv3_its_handler,
+                    0,
+                );
 
-        for cpu in 0..unsafe { consts::NCPU } {
-            let gicr_base = arch.gicr_base + cpu * PER_GICR_SIZE;
-            debug!("registering gicr {} at {:#x?}", cpu, gicr_base);
-            self.mmio_region_register(gicr_base, PER_GICR_SIZE, vgicv3_redist_handler, cpu);
-        }
-    }
-
-    pub fn irq_bitmap_init(&mut self, irqs: &[u32]) {
-        for irq in irqs {
-            self.insert_irq_to_bitmap(*irq);
-        }
-        for (index, &word) in self.irq_bitmap.iter().enumerate() {
-            for bit_position in 0..32 {
-                if word & (1 << bit_position) != 0 {
-                    let interrupt_number = index * 32 + bit_position;
+                for cpu in 0..MAX_CPU_NUM {
+                    let gicr_base = host_gicr_base(cpu);
                     info!(
-                        "Found interrupt in Zone {} irq_bitmap: {}",
-                        self.id, interrupt_number
+                        "Registering GIC Redistributor region for CPU {} at {:#x?}",
+                        cpu, gicr_base
+                    );
+                    inner.mmio_region_register(
+                        gicr_base,
+                        PER_GICR_SIZE,
+                        vgicv3_redist_handler,
+                        cpu,
                     );
                 }
             }
         }
     }
 
-    fn insert_irq_to_bitmap(&mut self, irq: u32) {
-        assert!(irq < 1024); // 1024 is the maximum number of interrupts supported by GICv3 (GICD_TYPER.ITLinesNumber)
-        let irq_index = irq / 32;
-        let irq_bit = irq % 32;
-        self.irq_bitmap[irq_index as usize] |= 1 << irq_bit;
+    pub fn irq_bitmap_init(&mut self, irqs_bitmap: &[BitmapWord]) {
+        let mut inner = self.write();
+        for i in 0..irqs_bitmap.len() {
+            let word = irqs_bitmap[i];
+
+            for j in 0..CONFIG_INTERRUPTS_BITMAP_BITS_PER_WORD {
+                if ((word >> j) & 1) == 1 {
+                    let irq_id = (i * CONFIG_INTERRUPTS_BITMAP_BITS_PER_WORD + j) as u32;
+                    assert!(irq_id < (CONFIG_MAX_INTERRUPTS as u32));
+                    let irq_index = irq_id / (CONFIG_INTERRUPTS_BITMAP_BITS_PER_WORD as u32);
+                    let irq_bit = irq_id % (CONFIG_INTERRUPTS_BITMAP_BITS_PER_WORD as u32);
+                    inner.irq_bitmap_mut()[irq_index as usize] |= 1 << irq_bit;
+                }
+            }
+        }
+
+        for (index, &word) in inner.irq_bitmap().iter().enumerate() {
+            for bit_position in 0..CONFIG_INTERRUPTS_BITMAP_BITS_PER_WORD {
+                if word & (1 << bit_position) != 0 {
+                    let interrupt_number =
+                        index * CONFIG_INTERRUPTS_BITMAP_BITS_PER_WORD + bit_position;
+                    info!(
+                        "Found interrupt in Zone {} irq_bitmap: {}",
+                        self.id(),
+                        interrupt_number
+                    );
+                }
+            }
+        }
     }
 }
 
@@ -153,9 +187,13 @@ pub fn vgicv3_redist_handler(mmio: &mut MMIOAccess, cpu: usize) -> HvResult {
                 }
             }
         }
-        GICR_TYPER => {
+        reg if reg == GICR_TYPER || reg == GICR_TYPER + 0x4 => {
+            // For aarch32 guest, the access to GICR_TYPER will be split into two parts.
+            // Many GIC supports 32-bit access to GICR_TYPER twice.
             mmio_perform_access(gicr_base, mmio);
-            if cpu == unsafe { consts::NCPU } - 1 {
+            let max_mpidr = BOARD_MPIDR_MAPPINGS.iter().max().copied().unwrap_or(0);
+            let current_mpidr = BOARD_MPIDR_MAPPINGS[cpu];
+            if current_mpidr == max_mpidr && reg == GICR_TYPER {
                 mmio.value |= GICR_TYPER_LAST;
             }
         }
@@ -182,14 +220,11 @@ pub fn vgicv3_redist_handler(mmio: &mut MMIOAccess, cpu: usize) -> HvResult {
             } else {
                 if mmio.is_write {
                     set_prop_baser(mmio.value);
+                    trace!("write prop tbl base : 0x{:x}!", mmio.value);
                 } else {
                     mmio.value = read_prop_baser();
+                    trace!("read prop tbl base : 0x{:x}", mmio.value);
                 }
-            }
-            if mmio.is_write {
-                trace!("write prop tbl base : 0x{:x}!", mmio.value);
-            } else {
-                trace!("read prop tbl base : 0x{:x}", mmio.value);
             }
         }
         GICR_SYNCR => {
@@ -303,6 +338,14 @@ pub fn vgicv3_dist_handler(mmio: &mut MMIOAccess, _arg: usize) -> HvResult {
         reg if reg_range(GICD_IPRIORITYR, 255, 4).contains(&reg) => {
             restrict_bitmask_access(mmio, (reg & 0x3ff) / 4, 8, false, gicd_base)
         }
+        reg if reg_range(GICD_IGRPMODR, 32, 4).contains(&reg) => {
+            // GICD_IGRPMODR is not supported in hvisor because it is used for secure state.
+            warn!(
+                "GICD_IGRPMODR is not supported in hvisor, reg = {:#x?}",
+                reg
+            );
+            Ok(())
+        }
         _ => vgicv3_dist_misc_access(mmio, gicd_base),
     }
 }
@@ -310,88 +353,84 @@ pub fn vgicv3_dist_handler(mmio: &mut MMIOAccess, _arg: usize) -> HvResult {
 pub fn vgicv3_its_handler(mmio: &mut MMIOAccess, _arg: usize) -> HvResult {
     let gits_base = host_gits_base();
     let reg = mmio.address;
+    let zone_id = this_zone_id();
 
-    // mmio_perform_access(gits_base, mmio);
     match reg {
         GITS_CTRL => {
             mmio_perform_access(gits_base, mmio);
-            if mmio.is_write {
-                trace!("write GITS_CTRL: {:#x}", mmio.value);
-            } else {
-                trace!("read GITS_CTRL: {:#x}", mmio.value);
-            }
         }
         GITS_CBASER => {
             if mmio.is_write {
-                set_cbaser(mmio.value);
-                trace!("write GITS_CBASER: {:#x}", mmio.value);
+                set_cbaser(mmio.value, zone_id);
             } else {
-                mmio.value = read_cbaser();
-                trace!("read GITS_CBASER: {:#x}", mmio.value);
+                mmio.value = read_cbaser(zone_id);
             }
         }
+        // v_dt_addr + 0x10000000;
         GITS_BASER => {
-            if this_zone_id() == 0 {
-                mmio_perform_access(gits_base, mmio);
-            } else {
-                if mmio.is_write {
-                    set_dt_baser(mmio.value);
-                } else {
-                    mmio.value = read_dt_baser();
-                }
-            }
             if mmio.is_write {
-                trace!("write GITS_BASER: 0x{:016x}", mmio.value);
+                set_dt_baser(mmio.value, zone_id);
+                if zone_id == 0 {
+                    let v_dt_addr = mmio.value & 0xfff_fff_fff_000usize;
+                    let phys_dt_trans =
+                        unsafe { this_zone().read().gpm().page_table_query(v_dt_addr) };
+                    match phys_dt_trans {
+                        Ok(p) => {
+                            mmio.value &= !0xfff_fff_fff_000usize;
+                            mmio.value |= p.0 as usize;
+                        }
+                        _ => {}
+                    }
+                    mmio_perform_access(gits_base, mmio);
+                }
             } else {
-                trace!("read GITS_BASER: 0x{:016x}", mmio.value);
+                mmio.value = read_dt_baser(zone_id);
             }
         }
         GITS_COLLECTION_BASER => {
-            if this_zone_id() == 0 {
-                mmio_perform_access(gits_base, mmio);
-            } else {
-                if mmio.is_write {
-                    set_ct_baser(mmio.value);
-                } else {
-                    mmio.value = read_ct_baser();
-                }
-            }
             if mmio.is_write {
-                trace!("write GITS_COLL_BASER: 0x{:016x}", mmio.value);
+                set_ct_baser(mmio.value, zone_id);
+                if zone_id == 0 {
+                    let v_ct_addr = mmio.value & 0xfff_fff_fff_000usize;
+                    let phys_ct_trans =
+                        unsafe { this_zone().read().gpm().page_table_query(v_ct_addr) };
+                    match phys_ct_trans {
+                        Ok(p) => {
+                            mmio.value &= !0xfff_fff_fff_000usize;
+                            mmio.value |= p.0 as usize;
+                        }
+                        _ => {}
+                    }
+                    mmio_perform_access(gits_base, mmio);
+                }
             } else {
-                trace!("read GITS_COLL_BASER: 0x{:016x}", mmio.value);
+                mmio.value = read_ct_baser(zone_id);
             }
         }
         GITS_CWRITER => {
             if mmio.is_write {
-                trace!("write GITS_CWRITER: {:#x}", mmio.value);
-                set_cwriter(mmio.value);
+                set_cwriter(mmio.value, zone_id);
             } else {
-                mmio.value = read_cwriter();
-                trace!("read GITS_CWRITER: {:#x}", mmio.value);
+                mmio.value = read_cwriter(zone_id);
             }
         }
         GITS_CREADR => {
-            mmio.value = read_creadr();
-            trace!("read GITS_CREADER: {:#x}", mmio.value);
+            mmio.value = read_creadr(zone_id);
         }
         GITS_TYPER => {
             mmio_perform_access(gits_base, mmio);
-            trace!("GITS_TYPER: {:#x}", mmio.value);
         }
         _ => {
             mmio_perform_access(gits_base, mmio);
             if mmio.is_write {
-                trace!(
+                debug!(
                     "write GITS offset: {:#x}, 0x{:016x}",
-                    mmio.address,
-                    mmio.value
+                    mmio.address, mmio.value
                 );
             } else {
-                trace!(
+                debug!(
                     "read GITS offset: {:#x}, 0x{:016x}",
-                    mmio.address,
-                    mmio.value
+                    mmio.address, mmio.value
                 );
             }
         }

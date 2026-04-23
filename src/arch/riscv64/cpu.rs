@@ -14,17 +14,18 @@
 // Authors:
 //
 use super::csr::*;
-use crate::arch::Stage2PageTable;
-use crate::percpu::this_cpu_data;
+use crate::cpu_data::this_cpu_data;
+use crate::platform::{BOARD_HARTID_MAP, BOARD_NCPUS};
 use crate::{
     arch::mm::new_s2_memory_set,
     consts::{PAGE_SIZE, PER_CPU_ARRAY_PTR, PER_CPU_SIZE},
-    memory::PhysAddr,
     memory::{
         addr::PHYS_VIRT_OFFSET, mm::PARKING_MEMORY_SET, GuestPhysAddr, HostPhysAddr, MemFlags,
-        MemoryRegion, MemorySet, VirtAddr, PARKING_INST_PAGE,
+        MemoryRegion, VirtAddr, PARKING_INST_PAGE,
     },
+    zone::find_zone,
 };
+use core::ptr::addr_of;
 
 #[repr(C)]
 #[derive(Debug)]
@@ -40,6 +41,8 @@ pub struct ArchCpu {
     pub init: bool,
     pub sstc: bool,
 }
+
+const PARKING_INST_GPA: usize = 0x0; // wfi instruction address (gpa)
 
 impl ArchCpu {
     pub fn new(cpuid: usize) -> Self {
@@ -82,9 +85,13 @@ impl ArchCpu {
         self.x[11] = dtb; // dtb addr
 
         if self.sstc {
+            // hvisor doesn't handle timer interrupt.
+            set_csr!(CSR_STIMECMP, usize::MAX);
             set_csr!(CSR_HENVCFG, 1 << 63);
             set_csr!(CSR_VSTIMECMP, usize::MAX);
         } else {
+            // In megrez board, this instruction is not supported. (illegal instruction)
+            #[cfg(not(feature = "eic770x_soc"))]
             set_csr!(CSR_HENVCFG, 0);
         }
         set_csr!(CSR_HCOUNTEREN, 1 << 1); // HCOUNTEREN_TM
@@ -103,7 +110,9 @@ impl ArchCpu {
     pub fn init_interrupt(&self) {
         // Used before enter into VM.
         set_csr!(CSR_HIDELEG, 1 << 2 | 1 << 6 | 1 << 10); // HIDELEG_VSSI | HIDELEG_VSTI | HIDELEG_VSEI
-        set_csr!(CSR_HEDELEG, 1 << 8 | 1 << 12 | 1 << 13 | 1 << 15); // HEDELEG_ECU | HEDELEG_IPF | HEDELEG_LPF | HEDELEG_SPF
+                                                          // Note: Breakpoint exception is temporarily needed.
+                                                          // TODO: This is need to be checked in the future.
+        set_csr!(CSR_HEDELEG, 1 << 3 | 1 << 8 | 1 << 12 | 1 << 13 | 1 << 15); // HEDELEG_ECU | HEDELEG_IPF | HEDELEG_LPF | HEDELEG_SPF
         set_csr!(CSR_SIE, 1 << 9 | 1 << 5 | 1 << 1); // Enable all interrupts (SEIE STIE SSIE).
     }
 
@@ -131,7 +140,7 @@ impl ArchCpu {
         // reset all registers related
         self.reset_regs(
             this_cpu_data().cpu_on_entry,
-            this_cpu_data().id,
+            BOARD_HARTID_MAP[this_cpu_id()], // This should be hartid.
             this_cpu_data().dtb_ipa,
         );
         this_cpu_data().activate_gpm();
@@ -151,15 +160,17 @@ impl ArchCpu {
         self.power_on = false;
 
         PARKING_MEMORY_SET.call_once(|| {
-            let parking_code: [u8; 4] = [0x73, 0x00, 0x50, 0x10]; // 1: wfi; b 1b
+            let parking_code: [u8; 8] = [0x73, 0x00, 0x50, 0x10, 0x6F, 0xF0, 0xDF, 0xFF]; // 1: wfi; b 1b
             unsafe {
-                PARKING_INST_PAGE[..4].copy_from_slice(&parking_code);
+                PARKING_INST_PAGE[..8].copy_from_slice(&parking_code);
             }
 
             let mut gpm = new_s2_memory_set();
             gpm.insert(MemoryRegion::new_with_offset_mapper(
-                0 as GuestPhysAddr,
-                unsafe { &PARKING_INST_PAGE as *const _ as HostPhysAddr - PHYS_VIRT_OFFSET },
+                PARKING_INST_GPA as GuestPhysAddr,
+                unsafe {
+                    addr_of!(PARKING_INST_PAGE) as *const _ as HostPhysAddr - PHYS_VIRT_OFFSET
+                },
                 PAGE_SIZE,
                 MemFlags::READ | MemFlags::WRITE | MemFlags::EXECUTE,
             ))
@@ -168,7 +179,12 @@ impl ArchCpu {
         });
 
         // reset current cpu -> pc = 0x0 (wfi)
-        self.reset_regs(0, this_cpu_data().id, this_cpu_data().dtb_ipa);
+        // Note: in park_inst_page
+        self.reset_regs(
+            PARKING_INST_GPA,        // entry_addr
+            this_cpu_id(),           // a0
+            this_cpu_data().dtb_ipa, // a1
+        );
         self.reset_interrupt();
         unsafe {
             PARKING_MEMORY_SET.get().unwrap().activate();
@@ -202,12 +218,36 @@ fn this_cpu_arch() -> &'static mut ArchCpu {
     unsafe { &mut *(sscratch as *mut ArchCpu) }
 }
 
+/// Get the logical cpu_id 0..BOARD_NCPUS.
 pub fn this_cpu_id() -> usize {
     this_cpu_arch().get_cpuid()
 }
 
+pub fn hartid_to_cpuid(hartid: usize) -> usize {
+    (0..BOARD_NCPUS)
+        .find(|&i| BOARD_HARTID_MAP[i] == hartid)
+        .unwrap()
+}
+
 pub fn cpu_start(cpuid: usize, start_addr: usize, opaque: usize) {
-    if let Some(e) = sbi_rt::hart_start(cpuid, start_addr, opaque).err() {
+    // Convert cpuid to hartid
+    if let Some(e) = sbi_rt::hart_start(BOARD_HARTID_MAP[cpuid], start_addr, opaque).err() {
         panic!("cpu_start error: {:#x?}", e);
     }
+}
+
+pub fn store_cpu_pointer_to_reg(pointer: usize) {
+    // Store the pointer to the current CPU's ArchCpu structure in CSR_SSCRATCH
+    write_csr!(CSR_SSCRATCH, pointer);
+    // println!("Stored CPU pointer to CSR_SSCRATCH: {:#x}", pointer);
+    return;
+}
+
+pub fn get_target_cpu(_irq: usize, zone_id: usize) -> usize {
+    find_zone(zone_id)
+        .unwrap()
+        .read()
+        .cpu_set()
+        .first_cpu()
+        .unwrap()
 }

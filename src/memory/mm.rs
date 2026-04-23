@@ -73,11 +73,11 @@ where
     pub fn new(pt_level: usize) -> Self {
         Self {
             regions: BTreeMap::new(),
-            #[cfg(target_arch = "aarch64")]
+            #[cfg(any(target_arch = "aarch64", target_arch = "riscv64"))]
             pt: PT::new(pt_level),
-            #[cfg(target_arch = "riscv64")]
-            pt: PT::new(),
             #[cfg(target_arch = "loongarch64")]
+            pt: PT::new(),
+            #[cfg(target_arch = "x86_64")]
             pt: PT::new(),
         }
     }
@@ -107,9 +107,24 @@ where
         true
     }
 
+    /// Iterate over all memory regions in the MemorySet.
+    pub fn for_each_region<F>(&self, mut f: F)
+    where
+        F: FnMut(&MemoryRegion<PT::VA>),
+    {
+        for region in self.regions.values() {
+            f(region);
+        }
+    }
+
     /// Add a memory region to this set.
     pub fn insert(&mut self, region: MemoryRegion<PT::VA>) -> HvResult {
-        info!("region.start: {:#X}", region.start.into());
+        info!(
+            "region.start: {:#X}, size: {:#X}, flags: {:#X}",
+            region.start.into(),
+            region.size,
+            region.flags
+        );
         assert!(is_aligned(region.start.into()));
         assert!(is_aligned(region.size));
         if region.size == 0 {
@@ -122,15 +137,50 @@ where
             );
             return hv_result_err!(EINVAL);
         }
+        // Keep metadata and page table consistent: pt.map must be all-or-nothing.
         self.pt.map(&region)?;
         self.regions.insert(region.start, region);
         Ok(())
     }
 
-    /// Find and remove memory region which starts from `start`.
-    pub fn delete(&mut self, start: PT::VA) -> HvResult {
+    pub fn try_insert(&mut self, region: MemoryRegion<PT::VA>) -> HvResult {
+        if !self.test_free_area(&region) {
+            warn!(
+                "try insert MemoryRegion overlapped in MemorySet: {:#x?}\n{:#x?}",
+                region, self
+            );
+            return Ok(());
+        }
+
+        self.insert(region)?;
+        Ok(())
+    }
+
+    pub fn try_insert_quiet(&mut self, region: MemoryRegion<PT::VA>) -> HvResult {
+        if !self.test_free_area(&region) {
+            return Ok(());
+        }
+
+        self.insert(region)?;
+        Ok(())
+    }
+
+    /// Find and remove memory region which starts from `start` and `size`
+    pub fn delete(&mut self, start: PT::VA, size: usize) -> HvResult {
         if let Entry::Occupied(e) = self.regions.entry(start) {
-            self.pt.unmap(e.get())?;
+            let region = e.get();
+            if region.size != size {
+                return hv_result_err!(
+                    EINVAL,
+                    format!(
+                        "MemorySet::delete(): size mismatch at {:#x?}, expected {:#x?}, got {:#x?}",
+                        start.into(),
+                        size,
+                        region.size
+                    )
+                );
+            }
+            self.pt.unmap(region)?;
             e.remove();
             Ok(())
         } else {
@@ -141,6 +191,25 @@ where
                     start.into()
                 )
             )
+        }
+    }
+
+    pub fn try_delete(&mut self, start: PT::VA, size: usize) -> HvResult {
+        if let Entry::Occupied(e) = self.regions.entry(start) {
+            let region = e.get();
+            if region.size == size {
+                self.delete(start, size)
+            } else {
+                warn!(
+                    "try delete MemoryRegion size mismatch at {:#x?}, expected {:#x?}, got {:#x?}",
+                    start.into(),
+                    size,
+                    region.size
+                );
+                Err(hv_err!(ENOMEM))
+            }
+        } else {
+            Err(hv_err!(ENOMEM))
         }
     }
 

@@ -15,24 +15,35 @@
 //
 use crate::{
     arch::{mm::new_s2_memory_set, sysreg::write_sysreg},
-    consts::{PAGE_SIZE, PER_CPU_ARRAY_PTR, PER_CPU_SIZE},
+    consts::{MAX_CPU_NUM, PAGE_SIZE, PER_CPU_ARRAY_PTR, PER_CPU_SIZE},
+    cpu_data::this_cpu_data,
     memory::{
         addr::PHYS_VIRT_OFFSET, mm::PARKING_MEMORY_SET, GuestPhysAddr, HostPhysAddr, MemFlags,
         MemoryRegion, VirtAddr, PARKING_INST_PAGE,
     },
-    percpu::this_cpu_data,
+    platform::BOARD_MPIDR_MAPPINGS,
+    zone::find_zone,
 };
 use aarch64_cpu::registers::{
     Readable, Writeable, ELR_EL2, HCR_EL2, MPIDR_EL1, SCTLR_EL1, SPSR_EL2, VTCR_EL2,
 };
+use core::ptr::addr_of;
 
 use super::{
     mm::{get_parange, get_parange_bits, is_s2_pt_level3},
     trap::vmreturn,
 };
 
+pub const MPIDR_MASK: u64 = 0xff00ffffff;
+
 pub fn cpu_start(cpuid: usize, start_addr: usize, opaque: usize) {
-    psci::cpu_on(cpuid as u64 | 0x80000000, start_addr as _, opaque as _).unwrap_or_else(|err| {
+    let new_cpuid = {
+        if cpuid >= MAX_CPU_NUM {
+            panic!("Invalid cpuid: {}", cpuid);
+        }
+        BOARD_MPIDR_MAPPINGS[cpuid]
+    };
+    psci::cpu_on(new_cpuid, start_addr as _, opaque as _).unwrap_or_else(|err| {
         if let psci::error::Error::AlreadyOn = err {
         } else {
             panic!("can't wake up cpu {}", cpuid);
@@ -58,6 +69,7 @@ impl GeneralRegisters {
 #[derive(Debug)]
 pub struct ArchCpu {
     pub cpuid: usize,
+    pub is_aarch32: bool,
     pub power_on: bool,
 }
 
@@ -65,6 +77,7 @@ impl ArchCpu {
     pub fn new(cpuid: usize) -> Self {
         Self {
             cpuid,
+            is_aarch32: false,
             power_on: false,
         }
     }
@@ -75,7 +88,14 @@ impl ArchCpu {
             self.cpuid, entry, dtb
         );
         ELR_EL2.set(entry as _);
-        SPSR_EL2.set(0x3c5);
+        SPSR_EL2.write(
+            SPSR_EL2::D::SET
+                + SPSR_EL2::A::SET
+                + SPSR_EL2::I::SET
+                + SPSR_EL2::F::SET
+                + SPSR_EL2::M::EL1h,
+        );
+
         let regs = self.guest_reg();
         regs.clear();
         regs.usr[0] = dtb as _; // dtb addr
@@ -156,9 +176,8 @@ impl ArchCpu {
         write_sysreg!(CNTV_CTL_EL0, 0);
         write_sysreg!(CNTV_CVAL_EL0, 0);
         write_sysreg!(CNTV_TVAL_EL0, 0);
-        // //disable stage 1
-        // write_sysreg!(SCTLR_EL1, 0);
 
+        // Disable EL1 MMU and all caches.
         SCTLR_EL1.set((1 << 11) | (1 << 20) | (3 << 22) | (3 << 28));
     }
 
@@ -166,8 +185,25 @@ impl ArchCpu {
         assert!(this_cpu_id() == self.cpuid);
         this_cpu_data().activate_gpm();
         self.reset(this_cpu_data().cpu_on_entry, this_cpu_data().dtb_ipa);
+        if self.is_aarch32 {
+            info!("cpu {} is aarch32", self.cpuid);
+            // if guest runs at aarch32, set these registers to aarch32 mode
+            HCR_EL2.write(
+                HCR_EL2::RW::AllLowerELsAreAarch32
+                    + HCR_EL2::TSC::EnableTrapEl1SmcToEl2
+                    + HCR_EL2::VM::SET
+                    + HCR_EL2::IMO::SET
+                    + HCR_EL2::FMO::SET,
+            );
+            // Return to AArch32 Supervisor (SVC) mode, disable IRQ, FIQ, ABT
+            SPSR_EL2.set(0x1D3);
+        }
         self.power_on = true;
-        info!("cpu {} started at {:#x?}", self.cpuid, this_cpu_data().cpu_on_entry);
+        info!(
+            "cpu {} started at {:#x?}",
+            self.cpuid,
+            this_cpu_data().cpu_on_entry
+        );
         unsafe {
             vmreturn(self.guest_reg() as *mut _ as usize);
         }
@@ -191,7 +227,9 @@ impl ArchCpu {
             let mut gpm = new_s2_memory_set();
             gpm.insert(MemoryRegion::new_with_offset_mapper(
                 0 as GuestPhysAddr,
-                unsafe { &PARKING_INST_PAGE as *const _ as HostPhysAddr - PHYS_VIRT_OFFSET },
+                unsafe {
+                    addr_of!(PARKING_INST_PAGE) as *const _ as HostPhysAddr - PHYS_VIRT_OFFSET
+                },
                 PAGE_SIZE,
                 MemFlags::READ | MemFlags::WRITE | MemFlags::IO,
             ))
@@ -207,43 +245,36 @@ impl ArchCpu {
     }
 }
 
-#[cfg(not(feature = "a55"))]
 pub fn mpidr_to_cpuid(mpidr: u64) -> u64 {
-    mpidr & 0xff00ffffff
+    let mpidr = mpidr & MPIDR_MASK;
+    (0..MAX_CPU_NUM)
+        .find(|&i| BOARD_MPIDR_MAPPINGS[i] == mpidr)
+        .unwrap() as u64
 }
 
-#[cfg(feature = "a55")]
-pub fn mpidr_to_cpuid(mpidr: u64) -> u64 {
-    (mpidr >> 8) & 0xff
+pub fn cpuid_to_mpidr_affinity(cpuid: u64) -> (u64, u64, u64, u64) {
+    let mpidr = BOARD_MPIDR_MAPPINGS[cpuid as usize];
+    let aff3 = (mpidr >> 32) & 0xff;
+    let aff2 = (mpidr >> 16) & 0xff;
+    let aff1 = (mpidr >> 8) & 0xff;
+    let aff0 = mpidr & 0xff;
+    (aff3, aff2, aff1, aff0)
 }
 
 pub fn this_cpu_id() -> usize {
     mpidr_to_cpuid(MPIDR_EL1.get()) as _
 }
 
-pub unsafe fn enable_mmu() {
-    const MAIR_FLAG: usize = 0x004404ff; //10001000000010011111111
-    const SCTLR_FLAG: usize = 0x30c51835; //110000110001010001100000110101
-    const TCR_FLAG: usize = 0x80853510; //10000000100001010011010100010000
+pub fn store_cpu_pointer_to_reg(_pointer: usize) {
+    // println!("aarch64 doesn't support store cpu pointer to reg, pointer: {:#x}", pointer);
+    return;
+}
 
-    core::arch::asm!(
-        "
-        /* setup the MMU for EL2 hypervisor mappings */
-        ldr	x1, ={MAIR_FLAG}     
-        msr	mair_el2, x1       // memory attributes for pagetable
-        ldr	x1, ={TCR_FLAG}
-	    msr	tcr_el2, x1        // translate control, virt range = [0, 2^48)
-
-	    /* Enable MMU, allow cacheability for instructions and data */
-	    ldr	x1, ={SCTLR_FLAG}
-	    msr	sctlr_el2, x1      // system control register
-
-	    isb
-	    tlbi alle2
-	    dsb	nsh
-    ",
-        MAIR_FLAG = const MAIR_FLAG,
-        TCR_FLAG = const TCR_FLAG,
-        SCTLR_FLAG = const SCTLR_FLAG,
-    );
+pub fn get_target_cpu(_irq: usize, zone_id: usize) -> usize {
+    find_zone(zone_id)
+        .unwrap()
+        .read()
+        .cpu_set()
+        .first_cpu()
+        .unwrap()
 }

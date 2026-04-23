@@ -15,7 +15,7 @@
 //
 use core::{ptr, usize};
 
-use crate::{error::HvResult, percpu::this_zone, zone::zone_error};
+use crate::{cpu_data::this_zone, error::HvResult, zone::zone_error};
 
 use super::GuestPhysAddr;
 
@@ -85,20 +85,43 @@ pub fn mmio_perform_access(base: usize, mmio: &mut MMIOAccess) {
 pub fn mmio_handle_access(mmio: &mut MMIOAccess) -> HvResult {
     let zone = this_zone();
     let res = zone.read().find_mmio_region(mmio.address, mmio.size);
-    let zone_id = zone.read().id;
+    let zone_id = zone.id();
     drop(zone);
     match res {
         Some((region, handler, arg)) => {
             mmio.address -= region.start;
-            handler(mmio, arg)
+
+            // x86_64 requires instruction emulation for mmio access
+            #[cfg(target_arch = "x86_64")]
+            if mmio.size == 0 {
+                return crate::arch::mmio::instruction_emulator(&handler, mmio, arg);
+            }
+
+            match handler(mmio, arg) {
+                Ok(_) => Ok(()),
+                Err(e) => {
+                    error!("mmio handler returned error: {:#x?}", e);
+                    Err(e)
+                }
+            }
         }
         None => {
             warn!("Zone {} unhandled mmio fault {:#x?}", zone_id, mmio);
+            // Guest RAM often does not cover GPA 0; stray readl/writel to IPA in the first
+            // page then traps here. Discard writes and return 0 on reads instead of
+            // failing the root zone (NULL __iomem / bad DT / bring-up holes).
+            if mmio.address < super::PAGE_SIZE {
+                if !mmio.is_write {
+                    mmio.value = 0;
+                }
+                return Ok(());
+            }
             hv_result_err!(EINVAL)
         }
     }
 }
 
+#[allow(dead_code)]
 pub fn mmio_generic_handler(mmio: &mut MMIOAccess, base: usize) -> HvResult {
     mmio_perform_access(base, mmio);
     Ok(())
