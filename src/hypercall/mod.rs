@@ -212,12 +212,6 @@ impl<'a> HyperCall<'a> {
             error!("hv_zone_start: cpu {} already on", boot_cpu);
             return hv_result_err!(EBUSY);
         };
-        #[cfg(target_arch = "loongarch64")]
-        {
-            // assert this is cpu 0
-            let cpuid = this_cpu_id();
-            assert_eq!(cpuid, 0);
-        }
         add_zone(zone);
         drop(_lock);
         HyperCallResult::Ok(0)
