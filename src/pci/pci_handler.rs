@@ -293,17 +293,8 @@ fn handle_endpoint_access(
                                     });
                                 }
 
-                                let paddr = if is_root {
-                                    dev.with_bar_ref_mut(slot, |bar| bar.set_value(new_vaddr));
-                                    if bar_type == PciMemType::Mem64High {
-                                        dev.with_bar_ref_mut(slot - 1, |bar| {
-                                            bar.set_value(new_vaddr)
-                                        });
-                                    }
-                                    new_vaddr as HostPhysAddr
-                                } else {
-                                    dev.with_bar_ref(slot, |bar| bar.get_value64()) as HostPhysAddr
-                                };
+                                let paddr =
+                                    dev.with_bar_ref(slot, |bar| bar.get_value64()) as HostPhysAddr;
                                 let bar_size = {
                                     let size = dev.with_bar_ref(slot, |bar| bar.get_size());
                                     if crate::memory::addr::is_aligned(size as usize) {
@@ -321,7 +312,7 @@ fn handle_endpoint_access(
 
                                 let zone = this_zone();
                                 let mut guard = zone.write();
-                                let gpm = &mut guard.gpm;
+                                let gpm = guard.gpm_mut();
 
                                 if !gpm
                                     .try_delete(old_vaddr.try_into().unwrap(), bar_size as usize)
@@ -347,14 +338,19 @@ fn handle_endpoint_access(
                                 /* after update gpm, need to flush iommu table
                                  * in x86_64
                                  */
-                                #[cfg(target_arch = "x86_64")]
+                                #[cfg(all(target_arch = "x86_64", feature = "intel_vtd"))]
                                 {
                                     let vbdf = dev.get_vbdf();
-                                    crate::arch::iommu::flush(
+                                    crate::device::iommu::flush(
                                         this_zone_id(),
                                         vbdf.bus,
                                         (vbdf.device << 3) + vbdf.function,
                                     );
+                                }
+                                #[cfg(target_arch = "riscv64")]
+                                unsafe {
+                                    // TOOD: add remote fence support (using sbi rfence spec?)
+                                    core::arch::asm!("hfence.gvma");
                                 }
                             }
                         }
@@ -446,7 +442,7 @@ fn handle_endpoint_access(
 
                             let zone = this_zone();
                             let mut guard = zone.write();
-                            let gpm = &mut guard.gpm;
+                            let gpm = guard.gpm_mut();
 
                             if !gpm
                                 .try_delete(old_vaddr.try_into().unwrap(), rom_size as usize)
@@ -472,10 +468,10 @@ fn handle_endpoint_access(
                             /* after update gpm, need to flush iommu table
                              * in x86_64
                              */
-                            #[cfg(target_arch = "x86_64")]
+                            #[cfg(all(target_arch = "x86_64", feature = "intel_vtd"))]
                             {
                                 let vbdf = dev.get_vbdf();
-                                crate::arch::iommu::flush(
+                                crate::device::iommu::flush(
                                     this_zone_id(),
                                     vbdf.bus,
                                     (vbdf.device << 3) + vbdf.function,
@@ -667,8 +663,8 @@ pub fn mmio_vpci_handler(mmio: &mut MMIOAccess, _base: usize) -> HvResult {
     let base = mmio.address as PciConfigAddress - offset + _base as PciConfigAddress;
 
     let dev: Option<ArcRwLockVirtualPciConfigSpace> = {
-        let mut guard = zone.write();
-        let vbus = &mut guard.vpci_bus;
+        let guard = zone.read();
+        let vbus = guard.vpci_bus();
         vbus.get_device_by_base(base)
     };
 
@@ -690,11 +686,11 @@ pub fn mmio_dwc_io_handler(mmio: &mut MMIOAccess, _base: usize) -> HvResult {
         let guard = zone.read();
 
         let atu_config = guard
-            .atu_configs
+            .atu_configs()
             .get_atu_by_io_base(_base as PciConfigAddress)
             .and_then(|atu| {
                 guard
-                    .atu_configs
+                    .atu_configs()
                     .get_ecam_by_io_base(_base as PciConfigAddress)
                     .map(|ecam| (*atu, ecam))
             });
@@ -731,11 +727,11 @@ pub fn mmio_dwc_cfg_handler(mmio: &mut MMIOAccess, _base: usize) -> HvResult {
     let guard = zone.read();
 
     let atu_config = guard
-        .atu_configs
+        .atu_configs()
         .get_atu_by_cfg_base(_base as PciConfigAddress)
         .and_then(|atu| {
             guard
-                .atu_configs
+                .atu_configs()
                 .get_ecam_by_cfg_base(_base as PciConfigAddress)
                 .map(|ecam| (*atu, ecam))
         });
@@ -769,7 +765,7 @@ pub fn mmio_dwc_cfg_handler(mmio: &mut MMIOAccess, _base: usize) -> HvResult {
 
         let dev: Option<ArcRwLockVirtualPciConfigSpace> = {
             let mut guard = zone.write();
-            let vbus = &mut guard.vpci_bus;
+            let vbus = guard.vpci_bus_mut();
             if let Some(dev) = vbus.get_device_by_base(base) {
                 is_dev_belong_to_zone = true;
                 Some(dev)
@@ -825,7 +821,10 @@ pub fn mmio_vpci_handler_dbi(mmio: &mut MMIOAccess, _base: usize) -> HvResult {
 
         // warn!("set atu0 register {:#X} value {:#X}", atu_offset, mmio.value);
 
-        let atu = guard.atu_configs.get_atu_by_ecam_mut(ecam_base).unwrap();
+        let atu = guard
+            .atu_configs_mut()
+            .get_atu_by_ecam_mut(ecam_base)
+            .unwrap();
 
         // info!("atu config write {:#?}", atu);
 
@@ -945,7 +944,7 @@ pub fn mmio_vpci_handler_dbi(mmio: &mut MMIOAccess, _base: usize) -> HvResult {
 
         let dev: Option<ArcRwLockVirtualPciConfigSpace> = {
             let mut guard = zone.write();
-            let vbus = &mut guard.vpci_bus;
+            let vbus = guard.vpci_bus_mut();
             if let Some(dev) = vbus.get_device_by_base(base) {
                 is_dev_belong_to_zone = true;
                 Some(dev)
@@ -992,7 +991,7 @@ pub fn mmio_vpci_direct_handler(mmio: &mut MMIOAccess, _base: usize) -> HvResult
 
     let dev: Option<ArcRwLockVirtualPciConfigSpace> = {
         let mut guard = zone.write();
-        let vbus = &mut guard.vpci_bus;
+        let vbus = guard.vpci_bus_mut();
         if let Some(dev) = vbus.get_device_by_base(base) {
             is_dev_belong_to_zone = true;
             Some(dev)
