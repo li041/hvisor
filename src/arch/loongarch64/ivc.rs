@@ -250,51 +250,97 @@ const CT_RW_SEC_SIZE: GuestPhysAddr = 0x08;
 const CT_OUT_SEC_SIZE: GuestPhysAddr = 0x0C;
 const CT_PEER_ID: GuestPhysAddr = 0x10;
 const CT_IPI_INVOKE: GuestPhysAddr = 0x14;
+const CT_CTRL_END: GuestPhysAddr = 0x18;
+
+fn ivc_reg_read_u32(ivc_id: u32, zone_id: usize, reg: GuestPhysAddr) -> HvResult<u32> {
+    let recs = IVC_RECORDS.lock();
+    let rec = match recs.get(&ivc_id) {
+        Some(rec) => rec,
+        None => return hv_result_err!(EINVAL, format!("ivc_id {} not found", ivc_id)),
+    };
+    let value = match reg {
+        CT_IVC_ID => ivc_id,
+        CT_MAX_PEERS => rec.max_peers,
+        CT_RW_SEC_SIZE => rec.rw_sec_size,
+        CT_OUT_SEC_SIZE => rec.out_sec_size,
+        CT_PEER_ID => match rec
+            .peer_infos
+            .iter()
+            .find(|&(_, info)| info.zone_id == zone_id as u32)
+            .map(|(pid, _)| *pid)
+        {
+            Some(pid) => pid,
+            None => return hv_result_err!(EINVAL, format!("zone {} has no peer id", zone_id)),
+        },
+        CT_IPI_INVOKE => 0,
+        _ => return hv_result_err!(EFAULT),
+    };
+    Ok(value)
+}
 
 /// 客户机访问 IVC 控制表 MMIO 时由 hypervisor 模拟读写
 pub fn mmio_ivc_handler(mmio: &mut MMIOAccess, base: usize) -> HvResult {
     let zone_id = this_zone_id();
     let is_write = mmio.is_write;
-    let ivc_infos = IVC_INFOS.lock();
-    let ivc_info = ivc_infos.get(&zone_id).unwrap();
-    let ivc_id = (0..ivc_info.len as usize)
-        .find(|&i| ivc_info.ivc_ct_ipas[i] == base as u64)
-        .map(|i| ivc_info.ivc_ids[i])
-        .unwrap();
-    drop(ivc_infos);
-    if mmio.address == CT_IPI_INVOKE && is_write {
-        let peer_id = mmio.value as u32;
-        let recs = IVC_RECORDS.lock();
-        let Some(rec) = recs.get(&ivc_id) else {
-            drop(recs);
-            return hv_result_err!(EINVAL);
-        };
-        let out = rec.peer_infos.get(&peer_id).map(|i| (i.zone_id, i.irq_num));
-        drop(recs);
-        let Some((target_zone, guest_irq)) = out else {
-            error!("zone {} has no peer {}", zone_id, peer_id);
-            return hv_result_err!(EINVAL);
-        };
-        return loongarch_ivc_deliver_to_peer(target_zone, guest_irq);
+    // Some MMIO backends pass absolute GPA in `mmio.address`, while others pass
+    // region-relative offset. Support both forms to avoid false EFAULT.
+    let offset = if mmio.address >= base {
+        (mmio.address as u64 - base as u64) as usize
+    } else {
+        mmio.address
+    };
+    if offset + mmio.size > CT_CTRL_END {
+        return hv_result_err!(EFAULT);
     }
 
-    let recs = IVC_RECORDS.lock();
-    let rec = recs.get(&ivc_id).unwrap();
-    mmio.value = match mmio.address {
-        CT_IVC_ID => ivc_id as usize,
-        CT_MAX_PEERS => rec.max_peers as usize,
-        CT_RW_SEC_SIZE => rec.rw_sec_size as usize,
-        CT_OUT_SEC_SIZE => rec.out_sec_size as usize,
-        CT_PEER_ID => {
-            let peer_id = rec
-                .peer_infos
-                .iter()
-                .find(|&(_, info)| info.zone_id == zone_id as u32)
-                .map(|(pid, _)| *pid)
-                .unwrap();
-            peer_id as usize
-        }
-        _ => return hv_result_err!(EFAULT),
+    let ivc_infos = IVC_INFOS.lock();
+    let ivc_info = match ivc_infos.get(&zone_id) {
+        Some(ivc_info) => ivc_info,
+        None => return hv_result_err!(ENODEV, format!("Zone {} has no ivc config!", zone_id)),
     };
+    let ivc_id = match (0..ivc_info.len as usize)
+        .find(|&i| ivc_info.ivc_ct_ipas[i] == base as u64)
+        .map(|i| ivc_info.ivc_ids[i])
+    {
+        Some(ivc_id) => ivc_id,
+        None => {
+            return hv_result_err!(
+                EINVAL,
+                format!("ivc base {:#x} not found in zone {}", base, zone_id)
+            );
+        }
+    };
+    drop(ivc_infos);
+
+    if is_write {
+        if offset >= CT_IPI_INVOKE && offset < CT_CTRL_END {
+            // Any write within IPI_INVOKE register is treated as peer trigger.
+            let peer_id = mmio.value as u32;
+            let recs = IVC_RECORDS.lock();
+            let Some(rec) = recs.get(&ivc_id) else {
+                drop(recs);
+                return hv_result_err!(EINVAL);
+            };
+            let out = rec.peer_infos.get(&peer_id).map(|i| (i.zone_id, i.irq_num));
+            drop(recs);
+            let Some((target_zone, guest_irq)) = out else {
+                error!("zone {} has no peer {}", zone_id, peer_id);
+                return hv_result_err!(EINVAL);
+            };
+            return loongarch_ivc_deliver_to_peer(target_zone, guest_irq);
+        }
+        return Ok(());
+    }
+
+    let mut value: usize = 0;
+    for i in 0..mmio.size {
+        let abs = offset + i;
+        let reg = (abs & !0x3) as GuestPhysAddr;
+        let shift = ((abs & 0x3) * 8) as u32;
+        let reg_value = ivc_reg_read_u32(ivc_id, zone_id, reg)?;
+        let byte = ((reg_value >> shift) & 0xff) as usize;
+        value |= byte << (i * 8);
+    }
+    mmio.value = value;
     Ok(())
 }
