@@ -17,13 +17,13 @@
 use crate::pci_dev;
 use crate::{arch::zone::HvArchZoneConfig, config::*, pci::vpci_dev::VpciDevType};
 
-pub const BOARD_NAME: &str = "ls3a5000";
+pub const BOARD_NAME: &str = "ls3a6000";
 
 pub const BOARD_NCPUS: usize = 4;
 
 pub const ROOT_ZONE_DTB_ADDR: u64 = 0x10000f000;
 pub const ROOT_ZONE_KERNEL_ADDR: u64 = 0x200000;
-pub const ROOT_ZONE_ENTRY: u64 = 0x9000000000d8c000;
+pub const ROOT_ZONE_ENTRY: u64 = 0x9000000000dba000;
 pub const ROOT_ZONE_CPUS: u64 = 1 << 0;
 
 pub const ROOT_ZONE_NAME: &str = "root-linux-la64";
@@ -116,12 +116,12 @@ pub const ROOT_ZONE_MEMORY_REGIONS: &[HvConfigMemoryRegion] = &[
     //     virtual_start: 0x18408000,
     //     size: 0x00008000,
     // }, // pci io resource
-    // HvConfigMemoryRegion {
-    //     mem_type: MEM_TYPE_IO,
-    //     physical_start: 0x60000000,
-    //     virtual_start: 0x60000000,
-    //     size: 0x20000000,
-    // }, // pci mem resource
+    HvConfigMemoryRegion {
+        mem_type: MEM_TYPE_IO,
+        physical_start: 0x60000000,
+        virtual_start: 0x60000000,
+        size: 0x20000000,
+    }, // pci mem resource
     HvConfigMemoryRegion {
         mem_type: MEM_TYPE_IO,
         physical_start: 0x1001_0000,
@@ -158,7 +158,7 @@ pub const ROOT_ZONE_IVC_CONFIG: [HvIvcConfig; 0] = [];
 
 pub const ROOT_PCI_CONFIG: [HvPciConfig; 1] = [HvPciConfig {
     bus_range_begin: 0x0,
-    bus_range_end: 0x1f,
+    bus_range_end: 0xff,
     ecam_base: 0xfe00000000,
     ecam_size: 0x20000000,
     io_base: 0x18408000,
@@ -182,7 +182,7 @@ pub const ROOT_PCI_CONFIG: [HvPciConfig; 1] = [HvPciConfig {
 /* 08:00.0, 08:00.1, 08:00.2, 08:00.3 net */
 /* BUS 6 on X4 slot */
 /* 06:00.0, 06:00.1, 06:00.2, 06:00.3 net */
-pub const ROOT_PCI_DEVS: [HvPciDevConfig; 26] = [
+pub const ROOT_PCI_DEVS: [HvPciDevConfig; 29] = [
     pci_dev!(0x0, 0x0, 0x0, 0x0, VpciDevType::Physical), // 00:00.0
     pci_dev!(0x0, 0x0, 0x0, 0x1, VpciDevType::Physical), // 00:00.1
     pci_dev!(0x0, 0x0, 0x0, 0x2, VpciDevType::Physical), // 00:00.2
@@ -209,6 +209,9 @@ pub const ROOT_PCI_DEVS: [HvPciDevConfig; 26] = [
     pci_dev!(0x0, 0x2, 0x0, 0x0, VpciDevType::Physical), // 02:00.0
     pci_dev!(0x0, 0x5, 0x0, 0x0, VpciDevType::Physical), // 05:00.0
     pci_dev!(0x0, 0x6, 0x0, 0x0, VpciDevType::Physical), // 06:00.0
+    pci_dev!(0x0, 0x6, 0x0, 0x1, VpciDevType::Physical), // 06:00.1
+    pci_dev!(0x0, 0x6, 0x0, 0x2, VpciDevType::Physical), // 06:00.2
+    pci_dev!(0x0, 0x6, 0x0, 0x3, VpciDevType::Physical), // 06:00.3
 ];
 
 // bus << 8 | dev << 5 | func << 3
