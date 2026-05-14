@@ -17,6 +17,7 @@ use crate::{
     device::irqchip::ls7a2000::loongarch_ivc_set_pending_guest_irq_for_pcpu,
     error::HvResult,
     event::send_event,
+    hypercall::SGI_IPI_ID,
     memory::{Frame, GuestPhysAddr, MMIOAccess, MemFlags, MemoryRegion},
     zone::{find_zone, this_zone_id, Zone},
 };
@@ -238,7 +239,7 @@ fn loongarch_ivc_deliver_to_peer(target_zone_id: u32, guest_irq: u32) -> HvResul
         pcpu,
         guest_irq
     );
-    send_event(pcpu, 0, IPI_EVENT_IVC);
+    send_event(pcpu, SGI_IPI_ID as usize, IPI_EVENT_IVC);
     Ok(())
 }
 
