@@ -656,6 +656,24 @@ fn handle_device_not_found(mmio: &mut MMIOAccess, offset: PciConfigAddress) {
     }
 }
 
+#[cfg(feature = "loongarch64_pcie")]
+fn decode_loongarch_cfg_region_addr(
+    region_relative_addr: usize,
+    ecam_base: usize,
+) -> (PciConfigAddress, PciConfigAddress) {
+    let rel = region_relative_addr as u64;
+    let offset_low = rel & 0xff;
+    let offset_high = (rel >> 24) & 0xf;
+    let offset = ((offset_high << 8) | offset_low) as PciConfigAddress;
+
+    // Keep BDF bits, clear only encoded offset bits:
+    // offset[7:0]   -> addr[7:0]
+    // offset[11:8]  -> addr[27:24]
+    let rel_base = rel & !0xffu64 & !(0xfu64 << 24);
+    let base = (ecam_base as u64 + rel_base) as PciConfigAddress;
+    (offset, base)
+}
+
 pub fn mmio_vpci_handler(mmio: &mut MMIOAccess, _base: usize) -> HvResult {
     // info!("mmio_vpci_handler {:#x}", mmio.address);
     let zone = this_zone();
@@ -985,7 +1003,11 @@ pub fn mmio_vpci_handler_dbi(mmio: &mut MMIOAccess, _base: usize) -> HvResult {
 
 pub fn mmio_vpci_direct_handler(mmio: &mut MMIOAccess, _base: usize) -> HvResult {
     let zone = this_zone();
+    #[cfg(feature = "loongarch64_pcie")]
+    let (offset, base) = decode_loongarch_cfg_region_addr(mmio.address, _base);
+    #[cfg(not(feature = "loongarch64_pcie"))]
     let offset = (mmio.address & 0xfff) as PciConfigAddress;
+    #[cfg(not(feature = "loongarch64_pcie"))]
     let base = mmio.address as PciConfigAddress - offset + _base as PciConfigAddress;
     let mut is_dev_belong_to_zone = false;
 

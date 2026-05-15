@@ -88,6 +88,8 @@ pub fn hv_end() -> VirtAddr {
 pub const IPI_EVENT_CLEAR_INJECT_IRQ: usize = 4;
 pub const IPI_EVENT_UPDATE_HART_LINE: usize = 5;
 pub const IPI_EVENT_SEND_IPI: usize = 6;
+/// IVC 对端 vCPU 上的待投递 guest 中断已就绪，在目标物理 CPU 上 `check_events` 中注入
+pub const IPI_EVENT_IVC: usize = 7;
 
 extern "C" {
     /// Entry point of the hypervisor written in assembly.

@@ -54,11 +54,13 @@ pub fn platform_root_zone_config() -> HvZoneConfig {
     let mut ivc_configs: [HvIvcConfig; 6] = [HvIvcConfig::default(); CONFIG_MAX_IVC_CONFIGS];
     let mut _num_ivc_configs = 0;
 
-    #[cfg(target_arch = "aarch64")]
-    {
-        _num_ivc_configs = ROOT_ZONE_IVC_CONFIG.len() as _;
-        ivc_configs[.._num_ivc_configs].copy_from_slice(&ROOT_ZONE_IVC_CONFIG);
-    }
+    check!(
+        ROOT_ZONE_IVC_CONFIG.len(),
+        CONFIG_MAX_IVC_CONFIGS,
+        "ROOT_ZONE_IVC_CONFIG"
+    );
+    _num_ivc_configs = ROOT_ZONE_IVC_CONFIG.len() as _;
+    ivc_configs[.._num_ivc_configs].copy_from_slice(&ROOT_ZONE_IVC_CONFIG);
 
     let mut interrupts_bitmap = [0; CONFIG_MAX_INTERRUPTS / CONFIG_INTERRUPTS_BITMAP_BITS_PER_WORD];
     interrupts_bitmap[..ROOT_ZONE_IRQS_BITMAP.len()].copy_from_slice(&ROOT_ZONE_IRQS_BITMAP);

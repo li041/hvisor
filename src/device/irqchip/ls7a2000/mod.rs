@@ -28,6 +28,7 @@ use crate::{
 };
 use chip::*;
 use loongArch64::register::tcfg;
+use core::sync::atomic::{AtomicU32, Ordering};
 use spin::Mutex;
 
 pub mod chip;
@@ -109,6 +110,42 @@ const INT_HWI7: usize = 9;
 const INT_PERF: usize = 10;
 const INT_TIMER: usize = 11;
 const INT_IPI: usize = 12;
+const IVC_NO_PENDING: u32 = u32::MAX;
+
+/// 目标 **物理** CPU 上、待为 guest 注入的 IVC 中断线（由发起方在 `send_event` 前写入）
+static IVC_GUEST_IRQ_PENDING: [AtomicU32; MAX_CPU_NUM] = {
+    const C: AtomicU32 = AtomicU32::new(IVC_NO_PENDING);
+    [C; MAX_CPU_NUM]
+};
+
+/// 在目标 pCPU 上记录 guest 将收到的中断线，随后对同一 CPU 发 `IPI_EVENT_IVC`（见 `loongarch_ivc_on_ipi_event`）
+pub fn loongarch_ivc_set_pending_guest_irq_for_pcpu(pcpu: usize, guest_irq: u32) {
+    if pcpu >= MAX_CPU_NUM {
+        return;
+    }
+    IVC_GUEST_IRQ_PENDING[pcpu].store(guest_irq, Ordering::Release);
+}
+
+/// 在收到 `IPI_EVENT_IVC` 的 pCPU 上为 **本 guest** 注入中断（`check_events` 中调用）
+pub fn loongarch_ivc_on_ipi_event() {
+    let pcpu = this_cpu_id();
+    if pcpu >= MAX_CPU_NUM {
+        return;
+    }
+    let guest_irq = IVC_GUEST_IRQ_PENDING[pcpu].swap(IVC_NO_PENDING, Ordering::AcqRel);
+    if guest_irq == IVC_NO_PENDING {
+        return;
+    }
+    if (guest_irq as usize) <= INT_IPI {
+        inject_irq(guest_irq as usize, false);
+    } else {
+        warn!(
+            "loongarch64 IVC: guest_irq {} > INT_IPI, wake with IPI only (EXTIOI not wired)",
+            guest_irq
+        );
+        inject_irq(INT_IPI, false);
+    }
+}
 
 /// inject irq to THIS cpu
 pub fn inject_irq(_irq: usize, is_hardware: bool) {

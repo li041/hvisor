@@ -15,14 +15,40 @@
 //  ForeverYolo <2572131118@qq.com>
 
 use crate::arch::cpu::this_cpu_id;
+use crate::arch::ivc::{IvcInfo, IVC_INFOS};
+use crate::arch::mm::LOONGARCH64_CACHED_DMW_PREFIX;
 use crate::config::HvZoneConfig;
 use crate::config::CONFIG_MAGIC_VERSION;
+use crate::cpu_data::this_zone;
 use crate::device::virtio_trampoline::MAX_DEVS;
 use crate::hypercall::HyperCall;
 use crate::hypercall::HyperCallResult;
+use crate::zone::this_zone_id;
+
 impl<'a> HyperCall<'a> {
+    /// 将本 zone 的 `IvcInfo` 写入客户机 `ivc_info_ipa` 指向的 GPA（经 S2 翻译 + DMW 可缓存前缀后由 HV 存取）。
     pub fn hv_ivc_info(&mut self, ivc_info_ipa: u64) -> HyperCallResult {
-        warn!("hv_ivc_info is not implemented for LoongArch64");
+        let zone_id = this_zone_id();
+        let zone = this_zone();
+        let hpa = match unsafe { zone.read().gpm().page_table_query(ivc_info_ipa as _) } {
+            Ok((pa, _, _)) => pa as u64,
+            Err(_) => {
+                return hv_result_err!(EFAULT, "hv_ivc_info: ipa not mapped or query failed");
+            }
+        };
+        let hva = hpa | LOONGARCH64_CACHED_DMW_PREFIX;
+        let ivc_info_dst = unsafe { &mut *(hva as *mut IvcInfo) };
+        let ivc_infos = IVC_INFOS.lock();
+        let zone_snapshot = ivc_infos.get(&(zone_id as usize));
+        match zone_snapshot {
+            Some(src) => *ivc_info_dst = *src,
+            None => {
+                return hv_result_err!(
+                    ENODEV,
+                    format!("Zone {} has no ivc config!", zone_id)
+                );
+            }
+        }
         HyperCallResult::Ok(0)
     }
 
