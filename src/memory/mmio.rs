@@ -83,6 +83,14 @@ pub fn mmio_perform_access(base: usize, mmio: &mut MMIOAccess) {
 }
 
 pub fn mmio_handle_access(mmio: &mut MMIOAccess) -> HvResult {
+    #[cfg(target_arch = "loongarch64")]
+    {
+        const TO_PHYS_MASK: GuestPhysAddr = (1u128 << 48) as GuestPhysAddr - 1;
+        const DMW_UNCACHED: GuestPhysAddr = 0x8000_0000_0000_0000;
+        if mmio.address >= DMW_UNCACHED {
+            mmio.address &= TO_PHYS_MASK;
+        }
+    }
     let zone = this_zone();
     let res = zone.read().find_mmio_region(mmio.address, mmio.size);
     let zone_id = zone.id();

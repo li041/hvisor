@@ -27,11 +27,17 @@ pub use crate::memory::PAGE_SIZE;
 use crate::{memory::addr::VirtAddr, platform::BOARD_NCPUS};
 use core::arch::global_asm;
 
-/// Size of the hypervisor heap.
-pub const HV_HEAP_SIZE: usize = 1024 * 1024; // 1 MiB
+/// Size of the hypervisor heap (Rust `alloc`: BTreeMap, `intrm_tables` Vec, etc.).
+/// LoongArch stage-2 tracks ~16K intermediate PT frames per ~31GiB region; Vec
+/// reallocation alone can require 512KiB when capacity doubles to 32768.
+pub const HV_HEAP_SIZE: usize = 8 * 1024 * 1024; // 8 MiB
 
-/// Size of the hypervisor memory pool used for dynamic allocation.
-pub const HV_MEM_POOL_SIZE: usize = 64 * 1024 * 1024; // 64 MiB
+/// Size of the hypervisor memory pool used for dynamic allocation (stage-2 PT frames, etc.).
+/// Must match linker `__hv_end - mem_pool_start`. LoongArch firmware typically reserves
+/// ~256–270 MiB for hvisor at load address; do not grow without updating boot firmware.
+pub const HV_MEM_POOL_SIZE: usize = 0x1000_0000; // 256 MiB
+
+const _: () = assert!(HV_MEM_POOL_SIZE == 256 * 1024 * 1024);
 
 /// Size of the per-CPU data area, including stack and CPU-local data.
 ///
@@ -71,6 +77,16 @@ pub fn hv_start() -> VirtAddr {
 pub fn core_end() -> VirtAddr {
     __core_end as _
 }
+
+/// Linker script constant: per-CPU areas + mem pool. Defined in platform linker.ld
+
+/// for LoongArch; exposed via global_asm on other arches.
+#[cfg(not(target_arch = "loongarch64"))]
+extern "C" {
+    #[allow(dead_code)]
+    fn __hv_end();
+}
+
 
 /// Returns the address of the memory pool start.
 ///
@@ -114,8 +130,11 @@ extern "C" {
 #[allow(dead_code)]
 pub const HV_EXTENDED_SIZE: usize = MAX_CPU_NUM * PER_CPU_SIZE + HV_MEM_POOL_SIZE;
 
+const _: () = assert!(HV_EXTENDED_SIZE == 0x1020_0000);
+
 // Expose HV_EXTENDED_SIZE as a global assembly symbol for linker accessibility.
-// This makes it easier for the linker script to directly reference this constant value.
+// LoongArch: also defined in platform linker.ld to avoid rustc global_asm quirks.
+#[cfg(not(target_arch = "loongarch64"))]
 global_asm!(
     ".global HV_EXTENDED_SIZE",
     ".equ HV_EXTENDED_SIZE, {hv_extended_size}",

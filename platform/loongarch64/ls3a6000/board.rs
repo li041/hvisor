@@ -23,55 +23,111 @@ pub const BOARD_NCPUS: usize = 4;
 
 pub const ROOT_ZONE_DTB_ADDR: u64 = 0x10000f000;
 pub const ROOT_ZONE_KERNEL_ADDR: u64 = 0x200000;
-pub const ROOT_ZONE_ENTRY: u64 = 0x9000000000dba000;
+pub const ROOT_ZONE_ENTRY: u64 = 0x9000000000dde000;
 pub const ROOT_ZONE_CPUS: u64 = 1 << 0;
 
 pub const ROOT_ZONE_NAME: &str = "root-linux-la64";
 
 pub const ROOT_ZONE_MEMORY_REGIONS: &[HvConfigMemoryRegion] = &[
-    /* memory regions */
+    /* legacy/low RAM not in DTS memory@ — map first for early boot */
+    HvConfigMemoryRegion {
+        mem_type: MEM_TYPE_RAM,
+        physical_start: 0x1000,
+        virtual_start: 0x0,
+        size: 0x10000,
+    }, // 0x0
+    HvConfigMemoryRegion {
+        mem_type: MEM_TYPE_RAM,
+        physical_start: 0x10000,
+        virtual_start: 0x10000,
+        size: 0x1f0000,
+    }, // 0x10000..0x200000 (covers 0xf0000 legacy alias + boot data)
+    /* memory regions — aligned with loongson-3a5000-hvisor-root.dts memory@ */
     HvConfigMemoryRegion {
         mem_type: MEM_TYPE_RAM,
         physical_start: 0x00200000,
         virtual_start: 0x00200000,
-        size: 0x0ee00000,
-    }, // ram
+        size: 0x0ec00000,
+    }, // bank0
     HvConfigMemoryRegion {
         mem_type: MEM_TYPE_RAM,
-        physical_start: 0x90000000,
-        virtual_start: 0x90000000,
-        size: 0x10000000,
-    }, // ram
+        physical_start: 0x90400000,
+        virtual_start: 0x90400000,
+        size: 0x67b60000,
+    }, // bank1
     HvConfigMemoryRegion {
         mem_type: MEM_TYPE_RAM,
-        physical_start: 0xf000_0000,
-        virtual_start: 0xf000_0000,
-        size: 0x1000_0000,
-    }, // ram
+        physical_start: 0xf7f70000,
+        virtual_start: 0xf7f70000,
+        size: 0x05f10000,
+    }, // bank2
     HvConfigMemoryRegion {
         mem_type: MEM_TYPE_RAM,
-        physical_start: 0x1_6000_0000,
-        virtual_start: 0x1_6000_0000,
-        size: 0x1000_0000,
-    }, // linux0
+        physical_start: 0xfe440000,
+        virtual_start: 0xfe440000,
+        size: 0xf1bc0000,
+    }, // bank3
+    /* shmem — aligned with loongson-3a5000-hvisor-root.dts reserved-memory shmem@0 */
     HvConfigMemoryRegion {
         mem_type: MEM_TYPE_RAM,
-        physical_start: 0xc000_0000,
-        virtual_start: 0xc000_0000,
-        size: 0x3000_0000,
-    }, // linux1
+        physical_start: 0x2_00c0_0000,
+        virtual_start: 0x2_00c0_0000,
+        size: 0x04000000,
+    }, // shmem@0: <0x2 0x00c00000 0 0x1c000000>
     HvConfigMemoryRegion {
         mem_type: MEM_TYPE_RAM,
-        physical_start: 0xa000_0000,
-        virtual_start: 0xa000_0000,
-        size: 0x2000_0000,
-    }, // linux2
+        physical_start: 0x2_04c0_0000,
+        virtual_start: 0x2_04c0_0000,
+        size: 0x0400_0000,
+    }, // shmem@1: <0x2 0x01000000 0 0x04000000>
     HvConfigMemoryRegion {
         mem_type: MEM_TYPE_RAM,
-        physical_start: 0x1_0000_0000,
-        virtual_start: 0x1_0000_0000,
-        size: 0x2000_0000,
-    }, // linux3
+        physical_start: 0x2_08c0_0000,
+        virtual_start: 0x2_08c0_0000,
+        size: 0x0400_0000,
+    }, // shmem@2: <0x2 0x01400000 0 0x04000000>
+    HvConfigMemoryRegion {
+        mem_type: MEM_TYPE_RAM,
+        physical_start: 0x2_0cc0_0000,
+        virtual_start: 0x2_0cc0_0000,
+        size: 0x0400_0000,
+    }, // shmem@3: <0x2 0x01800000 0 0x04000000>
+    HvConfigMemoryRegion {
+        mem_type: MEM_TYPE_RAM,
+        physical_start: 0x2_1cc0_0000,
+        virtual_start: 0x2_1cc0_0000,
+        size: 0x1_0000_0000,
+    }, // bank5: <0x2 0x1cc00000 0x1 0x0>
+    HvConfigMemoryRegion {
+        mem_type: MEM_TYPE_RAM,
+        physical_start: 0x3_1cc0_0000,
+        virtual_start: 0x3_1cc0_0000,
+        size: 0x1_0000_0000,
+    }, // bank6: <0x3 0x1cc00000 0x1 0x0>
+    HvConfigMemoryRegion {
+        mem_type: MEM_TYPE_RAM,
+        physical_start: 0x4_1cc0_0000,
+        virtual_start: 0x4_1cc0_0000,
+        size: 0x1_0000_0000,
+    }, // bank7: <0x4 0x1cc00000 0x1 0x0>
+    HvConfigMemoryRegion {
+        mem_type: MEM_TYPE_RAM,
+        physical_start: 0x5_1cc0_0000,
+        virtual_start: 0x5_1cc0_0000,
+        size: 0x1_0000_0000,
+    }, // bank8: <0x5 0x1cc00000 0x1 0x0>
+    HvConfigMemoryRegion {
+        mem_type: MEM_TYPE_RAM,
+        physical_start: 0x6_1cc0_0000,
+        virtual_start: 0x6_1cc0_0000,
+        size: 0x1_0000_0000,
+    }, // bank9: <0x6 0x1cc00000 0x1 0x0>
+    HvConfigMemoryRegion {
+        mem_type: MEM_TYPE_RAM,
+        physical_start: 0x7_1cc0_0000,
+        virtual_start: 0x7_1cc0_0000,
+        size: 0x1_0000_0000,
+    }, // bank10: <0x7 0x1cc00000 0x1 0x0>
     /* devices and controllers */
     HvConfigMemoryRegion {
         mem_type: MEM_TYPE_IO,
@@ -97,6 +153,24 @@ pub const ROOT_ZONE_MEMORY_REGIONS: &[HvConfigMemoryRegion] = &[
         virtual_start: 0x10000000,
         size: 0x1000,
     }, // pch-pic irq controller
+    HvConfigMemoryRegion {
+        mem_type: MEM_TYPE_IO,
+        physical_start: 0x1001_0000,
+        virtual_start: 0x1001_0000,
+        size: 0x0001_0000,
+    }, // pch/ls7a misc (e.g. 0x10010490)
+    HvConfigMemoryRegion {
+        mem_type: MEM_TYPE_IO,
+        physical_start: 0x100A_0000,
+        virtual_start: 0x100A_0000,
+        size: 0x1000,
+    }, // LS7A PWM0-3 (ACPI LOON0006)
+    HvConfigMemoryRegion {
+        mem_type: MEM_TYPE_IO,
+        physical_start: 0x0E0010000000,
+        virtual_start: 0x0E0010000000,
+        size: 0x1000,
+    }, // ACPI PCI0.THS1 board thermal (reg @ +0x414)
     /* PCI related stuffs ... */
     // HvConfigMemoryRegion {
     //     mem_type: MEM_TYPE_IO,
@@ -115,46 +189,84 @@ pub const ROOT_ZONE_MEMORY_REGIONS: &[HvConfigMemoryRegion] = &[
     //     physical_start: 0x18408000,
     //     virtual_start: 0x18408000,
     //     size: 0x00008000,
-    // }, // pci io resource
+    // }, // pci config space (HT)
+    HvConfigMemoryRegion {
+        mem_type: MEM_TYPE_IO,
+        physical_start: 0x18408000,
+        virtual_start: 0x18408000,
+        size: 0x00008000,
+    }, // pci io resource
     HvConfigMemoryRegion {
         mem_type: MEM_TYPE_IO,
         physical_start: 0x60000000,
         virtual_start: 0x60000000,
         size: 0x20000000,
     }, // pci mem resource
-    HvConfigMemoryRegion {
-        mem_type: MEM_TYPE_IO,
-        physical_start: 0x1001_0000,
-        virtual_start: 0x1001_0000,
-        size: 0x0001_0000,
-    }, // ?
-    /* map special regions - 2024.4.12 */
-    // linux's strscpy called gpa at 0x9000_0000_0000_0000 which is ldx x, 0x9000_0000_0000_0000(a1) + 0x0(a0) why ?
-    // __memcpy_fromio 0xf0000 why?
-    HvConfigMemoryRegion {
-        mem_type: MEM_TYPE_RAM,
-        physical_start: 0x1000,
-        virtual_start: 0x0,
-        size: 0x10000,
-    }, // 0x0
-    HvConfigMemoryRegion {
-        mem_type: MEM_TYPE_RAM,
-        physical_start: 0xf0000,
-        virtual_start: 0xf0000,
-        size: 0x10000,
-    }, // 0xf0000
-    HvConfigMemoryRegion {
-        mem_type: MEM_TYPE_RAM,
-        physical_start: 0x1_4000_0000,
-        virtual_start: 0x1_4000_0000,
-        size: 0x80_0000, // linux1-root
-    }, // SHARD_MEM
 ];
 
 pub const IRQ_WAKEUP_VIRTIO_DEVICE: usize = 32 + 0x20;
 pub const ROOT_ZONE_IRQS_BITMAP: &[BitmapWord] = &get_irqs_bitmap(&[]);
 pub const ROOT_ARCH_ZONE_CONFIG: HvArchZoneConfig = HvArchZoneConfig { dummy: 0 };
-pub const ROOT_ZONE_IVC_CONFIG: [HvIvcConfig; 0] = [];
+/// IVC 专用 EXTIOI MSI（全芯片 hwirq 唯一；每 CPU 一个 48 向量 bank：64+cpu*48 ..）。
+///
+/// 3A6000 固定分配：
+/// | CPU | IVC 条数 | slot | hwirq   |
+/// |-----|----------|------|---------|
+/// | 0   | 3        | 0–2  | 100–102 |
+/// | 1   | 1        | 0    | 148     |
+/// | 2   | 1        | 0    | 196     |
+/// | 3   | 1        | 0    | 244     |
+pub const IVC_MSIX_SLOTS_CPU0: u32 = 3;
+pub const IVC_MSIX_SLOTS_PER_OTHER_CPU: u32 = 1;
+pub const IVC_MSIX_EXTIOI_COUNT: u32 =
+    IVC_MSIX_SLOTS_CPU0 + IVC_MSIX_SLOTS_PER_OTHER_CPU * 3;
+pub const IVC_MSIX_SLOT_IN_BANK: u32 = 36;
+pub const IVC_MSIX_EXTIOI_BASE: u32 = 64 + IVC_MSIX_SLOT_IN_BANK; // 100 on CPU0
+
+pub const fn ivc_msix_hwirq_for_pcpu(pcpu: u32, slot: u32) -> u32 {
+    64 + pcpu * 48 + IVC_MSIX_SLOT_IN_BANK + slot
+}
+
+pub const fn ivc_msix_hwirq(slot: u32) -> u32 {
+    ivc_msix_hwirq_for_pcpu(0, slot)
+}
+
+pub const IVC_MSIX_CPU1_HWIRQ: u32 = ivc_msix_hwirq_for_pcpu(1, 0);
+pub const IVC_MSIX_CPU2_HWIRQ: u32 = ivc_msix_hwirq_for_pcpu(2, 0);
+pub const IVC_MSIX_CPU3_HWIRQ: u32 = ivc_msix_hwirq_for_pcpu(3, 0);
+
+pub const ROOT_ZONE_IVC_CONFIG: [HvIvcConfig; 3] = [
+    HvIvcConfig {
+        ivc_id: 0,
+        peer_id: 0,
+        control_table_ipa: 0x2_00be_0000,
+        shared_mem_ipa: 0x2_00be_1000,
+        rw_sec_size: 0,
+        out_sec_size: 0x1000,
+        interrupt_num: ivc_msix_hwirq(0),
+        max_peers: 2,
+    },
+    HvIvcConfig {
+        ivc_id: 1,
+        peer_id: 0,
+        control_table_ipa: 0x2_00be_3000,
+        shared_mem_ipa: 0x2_00be_4000,
+        rw_sec_size: 0,
+        out_sec_size: 0x1000,
+        interrupt_num: ivc_msix_hwirq(1),
+        max_peers: 2,
+    },
+    HvIvcConfig {
+        ivc_id: 2,
+        peer_id: 0,
+        control_table_ipa: 0x2_00be_6000,
+        shared_mem_ipa: 0x2_00be_7000,
+        rw_sec_size: 0,
+        out_sec_size: 0x1000,
+        interrupt_num: ivc_msix_hwirq(2),
+        max_peers: 2,
+    },
+];
 
 pub const ROOT_PCI_CONFIG: [HvPciConfig; 1] = [HvPciConfig {
     bus_range_begin: 0x0,
@@ -182,7 +294,7 @@ pub const ROOT_PCI_CONFIG: [HvPciConfig; 1] = [HvPciConfig {
 /* 08:00.0, 08:00.1, 08:00.2, 08:00.3 net */
 /* BUS 6 on X4 slot */
 /* 06:00.0, 06:00.1, 06:00.2, 06:00.3 net */
-pub const ROOT_PCI_DEVS: [HvPciDevConfig; 29] = [
+pub const ROOT_PCI_DEVS: [HvPciDevConfig; 26] = [
     pci_dev!(0x0, 0x0, 0x0, 0x0, VpciDevType::Physical), // 00:00.0
     pci_dev!(0x0, 0x0, 0x0, 0x1, VpciDevType::Physical), // 00:00.1
     pci_dev!(0x0, 0x0, 0x0, 0x2, VpciDevType::Physical), // 00:00.2
@@ -209,9 +321,9 @@ pub const ROOT_PCI_DEVS: [HvPciDevConfig; 29] = [
     pci_dev!(0x0, 0x2, 0x0, 0x0, VpciDevType::Physical), // 02:00.0
     pci_dev!(0x0, 0x5, 0x0, 0x0, VpciDevType::Physical), // 05:00.0
     pci_dev!(0x0, 0x6, 0x0, 0x0, VpciDevType::Physical), // 06:00.0
-    pci_dev!(0x0, 0x6, 0x0, 0x1, VpciDevType::Physical), // 06:00.1
-    pci_dev!(0x0, 0x6, 0x0, 0x2, VpciDevType::Physical), // 06:00.2
-    pci_dev!(0x0, 0x6, 0x0, 0x3, VpciDevType::Physical), // 06:00.3
+    // pci_dev!(0x0, 0x6, 0x0, 0x1, VpciDevType::Physical), // 06:00.1
+    // pci_dev!(0x0, 0x6, 0x0, 0x2, VpciDevType::Physical), // 06:00.2
+    // pci_dev!(0x0, 0x6, 0x0, 0x3, VpciDevType::Physical), // 06:00.3
 ];
 
 // bus << 8 | dev << 5 | func << 3
