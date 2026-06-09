@@ -852,10 +852,20 @@ impl VirtualPciConfigSpace {
      * Note: space field removed, bar values are cached in config_value.bar_value
      */
     pub fn config_value_init(&mut self) {
-        // Initialize bar_value cache from bar values
         for slot in 0..6 {
-            let bar_value = self.bararr[slot].get_value();
-            self.config_value.set_bar_value(slot, bar_value as u32);
+            let bar_type = self.bararr[slot].get_type();
+            if matches!(bar_type, PciMemType::Unused | PciMemType::Mem64High) {
+                continue;
+            }
+            let value = if bar_type == PciMemType::Mem64Low {
+                self.bararr[slot].get_value64()
+            } else {
+                self.bararr[slot].get_value() as u64
+            };
+            self.config_value.set_bar_value(slot, value as u32);
+            if bar_type == PciMemType::Mem64Low {
+                self.config_value.set_bar_value(slot + 1, (value >> 32) as u32);
+            }
         }
     }
 }
@@ -1993,6 +2003,53 @@ impl VirtualPciConfigSpace {
                 return false;
             }
             _ => false,
+        }
+    }
+}
+
+/// 根枚举只扫 function 0；仅存在 `06:00.N (N>0)` 时不会进入 GLOBAL_PCIE_LIST，guest 需直探硬件。
+#[cfg(feature = "loongarch64_pcie")]
+pub fn probe_loongarch_physical_device(
+    bdf: Bdf,
+    ecam_base: u64,
+    ecam_size: u64,
+    root_bus: u8,
+) -> Option<VirtualPciConfigSpace> {
+    use super::config_accessors::loongarch64::LoongArchConfigAccessor;
+
+    let accessor = LoongArchConfigAccessor::new(ecam_base, ecam_size, root_bus);
+    let address = accessor.get_physical_address(bdf, 0, root_bus).ok()?;
+    let pci_addr_base = accessor.get_pci_addr_base(bdf).ok()?;
+    let region = PciConfigMmio::new(address, CONFIG_LENTH);
+    let pci_header = PciConfigHeader::new_with_region(region);
+    let (vender_id, device_id) = pci_header.id();
+    if vender_id == 0xffff {
+        return None;
+    }
+    let class_and_revision = pci_header.revision_and_class();
+    match pci_header.header_type() {
+        HeaderType::Endpoint => {
+            let mut ep = EndpointHeader::new_with_region(PciConfigMmio::new(address, CONFIG_LENTH));
+            let bararr = ep.parse_bar();
+            let ep = Arc::new(ep);
+            let mut node = VirtualPciConfigSpace::endpoint(
+                bdf,
+                pci_addr_base,
+                ep,
+                bararr,
+                PciMem::default(),
+                class_and_revision,
+                (device_id, vender_id),
+            );
+            let _ = node.capability_enumerate();
+            Some(node)
+        }
+        other => {
+            warn!(
+                "loongarch pci probe: unsupported header {:?} for {:#?}",
+                other, bdf
+            );
+            None
         }
     }
 }

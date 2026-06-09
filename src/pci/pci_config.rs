@@ -65,8 +65,28 @@ use crate::{
 
 #[cfg(feature = "loongarch64_pcie")]
 use crate::pci::{
-    config_accessors::loongarch64::LoongArchConfigAccessor, pci_handler::mmio_vpci_direct_handler,
+    config_accessors::loongarch64::LoongArchConfigAccessor,
+    pci_handler::{loongarch_identity_map_passthrough_bars, mmio_vpci_direct_handler},
+    pci_struct::probe_loongarch_physical_device,
+    vpci_dev::VpciDevType,
 };
+
+#[cfg(feature = "loongarch64_pcie")]
+fn loongarch_setup_guest_passthrough(
+    inner: &mut crate::zone::ZoneInner,
+    zone_id: usize,
+    vbdf: super::pci_struct::Bdf,
+) {
+    let dev = inner.vpci_bus().get(&vbdf).cloned();
+    if let Some(dev) = dev {
+        if let Err(e) = loongarch_identity_map_passthrough_bars(inner, zone_id, &dev) {
+            warn!(
+                "loongarch identity bar map failed zone={} vbdf={:#?}: {:?}",
+                zone_id, vbdf, e
+            );
+        }
+    }
+}
 
 pub static GLOBAL_PCIE_LIST: Lazy<Mutex<BTreeMap<Bdf, ArcRwLockVirtualPciConfigSpace>>> =
     Lazy::new(|| {
@@ -170,6 +190,25 @@ pub fn hvisor_pci_init(pci_config: &[HvPciConfig]) -> HvResult {
     }
     info!("hvisor pci init done \n{:#?}", GLOBAL_PCIE_LIST);
     Ok(())
+}
+
+/// Linux 先枚举 function 0；若读不到且非 Jailhouse 类 hypervisor，则不再扫描同 slot 的其它 function。
+/// 当 zone 只分配了物理 `bus:dev.N`（N>0）时，在 guest 配置空间里呈现为 `bus:dev.0`。
+fn guest_vbdf_from_physical(bdf: Bdf, zone_devs: &[HvPciDevConfig]) -> Bdf {
+    if bdf.function() == 0 {
+        return bdf;
+    }
+    let has_func0 = zone_devs.iter().any(|d| {
+        d.domain == bdf.domain()
+            && d.bus == bdf.bus()
+            && d.device == bdf.device()
+            && d.function == 0
+    });
+    if has_func0 {
+        bdf
+    } else {
+        Bdf::new(bdf.domain(), bdf.bus(), bdf.device(), 0)
+    }
 }
 
 impl Zone {
@@ -316,8 +355,8 @@ impl Zone {
                 // device_pre = device;
                 // bus_pre = bus;
 
-                // TODO: adjust vbdf will cause line interrupt injecet error, so remove it temporarily
-                let vbdf = bdf;
+                // 仅重映射 function：物理 06:00.1 → guest 可见 06:00.0（配置空间 GPA 与 Linux 枚举一致）
+                let vbdf = guest_vbdf_from_physical(bdf, &filtered_devices);
 
                 info!("set bdf {:#?} to vbdf {:#?}", bdf, vbdf);
 
@@ -362,6 +401,12 @@ impl Zone {
                             let mut vdev_inner = dev.read().config_space.clone();
                             vdev_inner.set_vbdf(vbdf);
                             inner.vpci_bus_mut().insert(vbdf, vdev_inner);
+                            // insert() 会新建 Arc，zone_id 不会从 GLOBAL 条目继承
+                            if let Some(vdev_arc) = inner.vpci_bus().get(&vbdf) {
+                                vdev_arc.set_zone_id(Some(_zone_id as u32));
+                            }
+                            #[cfg(feature = "loongarch64_pcie")]
+                            loongarch_setup_guest_passthrough(&mut inner, _zone_id, vbdf);
                         } else {
                             warn!(
                                 "Device {:#?} is already allocated to zone {:?}",
@@ -372,6 +417,46 @@ impl Zone {
                     }
                 } else {
                     warn!("can not find dev {:#?} in GLOBAL_PCIE_LIST (not detected during enumeration)", bdf);
+                    #[cfg(feature = "loongarch64_pcie")]
+                    {
+                        if dev_config.dev_type == VpciDevType::Physical {
+                            if let Some(mut vdev) = probe_loongarch_physical_device(
+                                bdf,
+                                ecam_base,
+                                target_pci_config.ecam_size,
+                                bus_range_begin,
+                            ) {
+                                info!(
+                                    "loongarch pci probe: insert physical {:#?} as vbdf {:#?}",
+                                    bdf, vbdf
+                                );
+                                vdev.set_vbdf(vbdf);
+                                inner.vpci_bus_mut().insert(vbdf, vdev);
+                                if let Some(vdev_arc) = inner.vpci_bus().get(&vbdf) {
+                                    vdev_arc.set_zone_id(Some(_zone_id as u32));
+                                    let bar0_hpa = vdev_arc
+                                        .with_bar_ref(0, |bar| bar.get_value64() & !0xf);
+                                    let bar3_hpa = vdev_arc
+                                        .with_bar_ref(3, |bar| bar.get_value64() & !0xf);
+                                    info!(
+                                        "loongarch pci probe: zone={} vbdf={:#?} host_bdf={:#?} cfg_base={:#x} bar0_hpa={:#x} bar3_hpa={:#x}",
+                                        _zone_id,
+                                        vbdf,
+                                        bdf,
+                                        vdev_arc.read().get_base(),
+                                        bar0_hpa,
+                                        bar3_hpa
+                                    );
+                                    loongarch_setup_guest_passthrough(&mut inner, _zone_id, vbdf);
+                                }
+                            } else {
+                                warn!(
+                                    "loongarch pci probe: no device at physical {:#?} (check hardware / BDF)",
+                                    bdf
+                                );
+                            }
+                        }
+                    }
                     #[cfg(feature = "ecam_pcie")]
                     {
                         let dev_type = dev_config.dev_type;

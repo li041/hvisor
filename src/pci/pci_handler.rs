@@ -20,16 +20,13 @@ use crate::cpu_data::this_zone;
 use crate::error::HvResult;
 use crate::memory::MMIOAccess;
 use crate::memory::{GuestPhysAddr, HostPhysAddr, MemFlags, MemoryRegion};
-use crate::zone::is_this_root_zone;
+use crate::zone::{find_zone, is_this_root_zone, this_zone_id, ZoneInner};
 
 use super::pci_access::{BridgeField, EndpointField, HeaderType, PciField, PciMemType};
 use super::pci_config::GLOBAL_PCIE_LIST;
 use super::pci_struct::{ArcRwLockVirtualPciConfigSpace, BIT_LENTH};
 use super::vpci_dev::VpciDevType;
 use super::PciConfigAddress;
-
-#[cfg(target_arch = "x86_64")]
-use crate::zone::this_zone_id;
 
 #[cfg(feature = "dwc_pcie")]
 use crate::{
@@ -144,6 +141,286 @@ fn handle_virt_pci_request(
             }
         }
     }
+}
+
+/// 在指定 zone 的 GPM 中建立 BAR 映射（`zone_create` 阶段尚无 `this_zone()`，须显式传入）。
+pub fn guest_map_mmio_bar_gpm(
+    inner: &mut ZoneInner,
+    zone_id: usize,
+    dev: &ArcRwLockVirtualPciConfigSpace,
+    kind: &str,
+    slot: usize,
+    old_vaddr: u64,
+    new_vaddr: u64,
+    paddr: HostPhysAddr,
+    map_size: u64,
+) -> HvResult {
+    let vbdf = dev.get_vbdf();
+    let host_bdf = dev.read().get_bdf();
+    let gpm = inner.gpm_mut();
+
+    // 已正确映射则跳过（bar-init 与 BAR 写可能重复触发同一 GPA）
+    unsafe {
+        if let Ok((resolved_hpa, _, _)) = gpm.page_table_query(new_vaddr as GuestPhysAddr) {
+            if resolved_hpa as u64 == paddr as u64 {
+                return Ok(());
+            }
+        }
+    }
+
+    // old_gpa=0 是 zone 低地址 RAM，禁止 delete；仅替换真实旧 BAR GPA
+    if old_vaddr != 0 && old_vaddr != new_vaddr {
+        if let Err(e) = gpm.try_delete(old_vaddr as GuestPhysAddr, map_size as usize) {
+            //info!(
+            //    "pci {} map: zone={} delete old gpa={:#x} size={:#x}: {:?}",
+            //    kind, zone_id, old_vaddr, map_size, e
+            //);
+        }
+    }
+
+    let region = MemoryRegion::new_with_offset_mapper(
+        new_vaddr as GuestPhysAddr,
+        paddr,
+        map_size as usize,
+        MemFlags::READ | MemFlags::WRITE | MemFlags::IO,
+    );
+
+    if let Err(e) = gpm.insert(region) {
+        warn!(
+            "pci {} map FAILED: zone={} vbdf={:#?} gpa={:#x} hpa={:#x}: {:?}",
+            kind, zone_id, vbdf, new_vaddr, paddr, e
+        );
+        return Err(e);
+    }
+
+    unsafe {
+        match gpm.page_table_query(new_vaddr as GuestPhysAddr) {
+            Ok((resolved_hpa, _, _)) => {
+                //info!(
+                //    "pci {} map verify: zone={} gpa={:#x} -> hpa={:#x} (expect {:#x})",
+                //    kind, zone_id, new_vaddr, resolved_hpa, paddr
+                //);
+                if resolved_hpa as u64 != paddr as u64 {
+                    warn!(
+                        "pci {} map MISMATCH: zone={} gpa={:#x} resolved={:#x} expect={:#x}",
+                        kind, zone_id, new_vaddr, resolved_hpa, paddr
+                    );
+                }
+            }
+            Err(e) => {
+                warn!(
+                    "pci {} map verify: zone={} gpa={:#x} not in GPM: {:?}",
+                    kind, zone_id, new_vaddr, e
+                );
+            }
+        }
+    }
+
+    #[cfg(target_arch = "loongarch64")]
+    {
+        //info!(
+        //    "pci {} map: zone={} invtlb after gpa={:#x}",
+        //    kind, zone_id, new_vaddr
+        //);
+        unsafe {
+            core::arch::asm!("invtlb 0, $r0, $r0");
+        }
+    }
+    #[cfg(target_arch = "aarch64")]
+    unsafe {
+        core::arch::asm!("isb");
+        core::arch::asm!("tlbi vmalls12e1is");
+        core::arch::asm!("dsb nsh");
+    }
+    #[cfg(all(target_arch = "x86_64", feature = "intel_vtd"))]
+    {
+        crate::device::iommu::flush(
+            zone_id,
+            vbdf.bus,
+            (vbdf.device << 3) + vbdf.function,
+        );
+    }
+    #[cfg(target_arch = "riscv64")]
+    unsafe {
+        core::arch::asm!("hfence.gvma");
+    }
+
+    Ok(())
+}
+
+fn pci_dev_zone_id(dev: &ArcRwLockVirtualPciConfigSpace) -> HvResult<usize> {
+    if let Some(id) = dev.get_zone_id() {
+        return Ok(id as usize);
+    }
+    // vpci_bus 条目由 config_space.clone() 新建时可能尚未写入 zone_id
+    Ok(this_zone_id())
+}
+
+#[cfg(all(target_arch = "loongarch64", feature = "loongarch64_pcie"))]
+fn loongarch_sync_config_bar(
+    dev: &ArcRwLockVirtualPciConfigSpace,
+    slot: usize,
+    gpa: u64,
+    bar_type: PciMemType,
+) {
+    match bar_type {
+        PciMemType::Mem32 | PciMemType::Io => {
+            dev.with_config_value_mut(|cv| cv.set_bar_value(slot, gpa as u32));
+        }
+        PciMemType::Mem64Low => {
+            dev.with_config_value_mut(|cv| {
+                cv.set_bar_value(slot, gpa as u32);
+                cv.set_bar_value(slot + 1, (gpa >> 32) as u32);
+            });
+        }
+        PciMemType::Mem64High => {
+            dev.with_config_value_mut(|cv| {
+                cv.set_bar_value(slot - 1, gpa as u32);
+                cv.set_bar_value(slot, (gpa >> 32) as u32);
+            });
+        }
+        _ => {}
+    }
+}
+
+#[cfg(all(target_arch = "loongarch64", feature = "loongarch64_pcie"))]
+const LOONGARCH_LEGACY_PCI_MEM64: u64 = 0x7500_0000;
+
+/// 建立直通 BAR 的 GPM：identity (GPA=HPA) + Guest/旧 DT 可能使用的别名 GPA。
+#[cfg(all(target_arch = "loongarch64", feature = "loongarch64_pcie"))]
+fn loongarch_map_passthrough_bar_gpm(
+    inner: &mut ZoneInner,
+    zone_id: usize,
+    dev: &ArcRwLockVirtualPciConfigSpace,
+    kind: &str,
+    slot: usize,
+    old_vaddr: u64,
+    identity_gpa: u64,
+    paddr: HostPhysAddr,
+    bar_size: u64,
+    extra_gpas: &[u64],
+) -> HvResult {
+    guest_map_mmio_bar_gpm(
+        inner,
+        zone_id,
+        dev,
+        kind,
+        slot,
+        old_vaddr,
+        identity_gpa,
+        paddr,
+        bar_size,
+    )?;
+    for &alias in extra_gpas {
+        if alias == 0 || alias == identity_gpa {
+            continue;
+        }
+        guest_map_mmio_bar_gpm(
+            inner,
+            zone_id,
+            dev,
+            "bar-alias",
+            slot,
+            alias,
+            alias,
+            paddr,
+            bar_size,
+        )?;
+    }
+    Ok(())
+}
+
+#[cfg(all(target_arch = "loongarch64", feature = "loongarch64_pcie"))]
+fn loongarch_bar_init_extra_gpas(identity_gpa: u64) -> alloc::vec::Vec<u64> {
+    let mut extras = alloc::vec::Vec::new();
+    if identity_gpa != LOONGARCH_LEGACY_PCI_MEM64 {
+        extras.push(LOONGARCH_LEGACY_PCI_MEM64);
+    }
+    extras
+}
+
+#[cfg(all(target_arch = "loongarch64", feature = "loongarch64_pcie"))]
+fn loongarch_refresh_bar_hpa(
+    dev: &ArcRwLockVirtualPciConfigSpace,
+    slot: usize,
+) -> u64 {
+    let paddr = dev.with_bar_ref(slot, |bar| bar.get_value64()) & !0xf;
+    if paddr != 0 {
+        return paddr;
+    }
+    let offset = EndpointField::Bar(slot).to_offset() as PciConfigAddress;
+    if let Ok(v) = dev.read_hw(offset, 4) {
+        let hpa = (v as u64) & !0xf;
+        if hpa != 0 {
+            dev.with_bar_ref_mut(slot, |bar| bar.set_value(hpa));
+            return hpa;
+        }
+    }
+    0
+}
+
+#[cfg(all(target_arch = "loongarch64", feature = "loongarch64_pcie"))]
+fn loongarch_passthrough_map_gpa(
+    dev: &ArcRwLockVirtualPciConfigSpace,
+    slot: usize,
+    bar_type: PciMemType,
+    paddr: u64,
+) -> u64 {
+    let gpa = paddr & !0xf;
+    dev.with_bar_ref_mut(slot, |bar| bar.set_virtual_value(gpa));
+    if bar_type == PciMemType::Mem64High {
+        dev.with_bar_ref_mut(slot - 1, |bar| bar.set_virtual_value(gpa));
+    }
+    loongarch_sync_config_bar(dev, slot, gpa, bar_type);
+    gpa
+}
+
+/// LoongArch 直通设备：zone 创建阶段建立 GPA=HPA identity BAR 映射。
+#[cfg(all(target_arch = "loongarch64", feature = "loongarch64_pcie"))]
+pub fn loongarch_identity_map_passthrough_bars(
+    inner: &mut ZoneInner,
+    zone_id: usize,
+    dev: &ArcRwLockVirtualPciConfigSpace,
+) -> HvResult {
+    dev.write().config_space.config_value_init();
+
+    for slot in 0..6 {
+        let bar_type = dev.with_bar_ref(slot, |bar| bar.get_type());
+        if matches!(bar_type, PciMemType::Unused | PciMemType::Mem64High) {
+            continue;
+        }
+        let paddr = loongarch_refresh_bar_hpa(dev, slot);
+        if paddr == 0 {
+            continue;
+        }
+        let gpa = loongarch_passthrough_map_gpa(dev, slot, bar_type, paddr);
+        let bar_size = dev.with_bar_ref(slot, |bar| {
+            let size = bar.get_size();
+            if crate::memory::addr::is_aligned(size as usize) {
+                size
+            } else {
+                crate::memory::PAGE_SIZE as u64
+            }
+        });
+        let extras = if slot == 0 {
+            loongarch_bar_init_extra_gpas(gpa)
+        } else {
+            alloc::vec::Vec::new()
+        };
+        loongarch_map_passthrough_bar_gpm(
+            inner,
+            zone_id,
+            dev,
+            "bar-init",
+            slot,
+            0,
+            gpa,
+            paddr as HostPhysAddr,
+            bar_size,
+            &extras,
+        )?;
+    }
+    Ok(())
 }
 
 fn handle_endpoint_access(
@@ -284,17 +561,26 @@ fn handle_endpoint_access(
                                     }
                                 };
 
-                                // info!("new_vaddr: {:#x}", new_vaddr);
-                                // info!("old_vaddr: {:#x}", old_vaddr);
-                                dev.with_bar_ref_mut(slot, |bar| bar.set_virtual_value(new_vaddr));
-                                if bar_type == PciMemType::Mem64High {
-                                    dev.with_bar_ref_mut(slot - 1, |bar| {
+                                let paddr =
+                                    dev.with_bar_ref(slot, |bar| bar.get_value64()) & !0xf;
+
+                                #[cfg(all(target_arch = "loongarch64", feature = "loongarch64_pcie"))]
+                                let map_vaddr =
+                                    loongarch_passthrough_map_gpa(&dev, slot, bar_type, paddr);
+
+                                #[cfg(not(all(target_arch = "loongarch64", feature = "loongarch64_pcie")))]
+                                let map_vaddr = {
+                                    dev.with_bar_ref_mut(slot, |bar| {
                                         bar.set_virtual_value(new_vaddr)
                                     });
-                                }
+                                    if bar_type == PciMemType::Mem64High {
+                                        dev.with_bar_ref_mut(slot - 1, |bar| {
+                                            bar.set_virtual_value(new_vaddr)
+                                        });
+                                    }
+                                    new_vaddr
+                                };
 
-                                let paddr =
-                                    dev.with_bar_ref(slot, |bar| bar.get_value64()) as HostPhysAddr;
                                 let bar_size = {
                                     let size = dev.with_bar_ref(slot, |bar| bar.get_size());
                                     if crate::memory::addr::is_aligned(size as usize) {
@@ -303,50 +589,55 @@ fn handle_endpoint_access(
                                         crate::memory::PAGE_SIZE as u64
                                     }
                                 };
-                                let new_vaddr =
-                                    if !crate::memory::addr::is_aligned(new_vaddr as usize) {
-                                        crate::memory::addr::align_up(new_vaddr as usize) as u64
+                                let map_vaddr =
+                                    if !crate::memory::addr::is_aligned(map_vaddr as usize) {
+                                        crate::memory::addr::align_up(map_vaddr as usize) as u64
                                     } else {
-                                        new_vaddr as u64
+                                        map_vaddr as u64
                                     };
 
-                                let zone = this_zone();
-                                let mut guard = zone.write();
-                                let gpm = guard.gpm_mut();
-
-                                if !gpm
-                                    .try_delete(old_vaddr.try_into().unwrap(), bar_size as usize)
-                                    .is_ok()
+                                let zone_id = pci_dev_zone_id(&dev)?;
+                                let zone = find_zone(zone_id)
+                                    .ok_or_else(|| hv_err!(EINVAL, "zone not found"))?;
+                                let mut inner = zone.write();
+                                #[cfg(all(target_arch = "loongarch64", feature = "loongarch64_pcie"))]
                                 {
-                                    // warn!("delete bar {}: can not found 0x{:x}", slot, old_vaddr);
+                                    let mut extras = alloc::vec::Vec::new();
+                                    if new_vaddr != 0 && new_vaddr != map_vaddr {
+                                        extras.push(new_vaddr);
+                                    }
+                                    if slot == 0 {
+                                        for g in loongarch_bar_init_extra_gpas(map_vaddr) {
+                                            if !extras.contains(&g) {
+                                                extras.push(g);
+                                            }
+                                        }
+                                    }
+                                    loongarch_map_passthrough_bar_gpm(
+                                        &mut inner,
+                                        zone_id,
+                                        &dev,
+                                        "bar",
+                                        slot,
+                                        old_vaddr,
+                                        map_vaddr,
+                                        paddr as HostPhysAddr,
+                                        bar_size,
+                                        &extras,
+                                    )?;
                                 }
-                                gpm.try_insert_quiet(MemoryRegion::new_with_offset_mapper(
-                                    new_vaddr as GuestPhysAddr,
+                                #[cfg(not(all(target_arch = "loongarch64", feature = "loongarch64_pcie")))]
+                                guest_map_mmio_bar_gpm(
+                                    &mut inner,
+                                    zone_id,
+                                    &dev,
+                                    "bar",
+                                    slot,
+                                    old_vaddr,
+                                    map_vaddr,
                                     paddr as HostPhysAddr,
-                                    bar_size as _,
-                                    MemFlags::READ | MemFlags::WRITE,
-                                ))?;
-                                drop(guard);
-                                /* after update gpm, mem barrier is needed
-                                 */
-                                #[cfg(target_arch = "aarch64")]
-                                unsafe {
-                                    core::arch::asm!("isb");
-                                    core::arch::asm!("tlbi vmalls12e1is");
-                                    core::arch::asm!("dsb nsh");
-                                }
-                                /* after update gpm, need to flush iommu table
-                                 * in x86_64
-                                 */
-                                #[cfg(all(target_arch = "x86_64", feature = "intel_vtd"))]
-                                {
-                                    let vbdf = dev.get_vbdf();
-                                    crate::device::iommu::flush(
-                                        this_zone_id(),
-                                        vbdf.bus,
-                                        (vbdf.device << 3) + vbdf.function,
-                                    );
-                                }
+                                    bar_size,
+                                )?;
                                 #[cfg(target_arch = "riscv64")]
                                 unsafe {
                                     // TOOD: add remote fence support (using sbi rfence spec?)
@@ -440,43 +731,21 @@ fn handle_endpoint_access(
                                 new_vaddr as u64
                             };
 
-                            let zone = this_zone();
-                            let mut guard = zone.write();
-                            let gpm = guard.gpm_mut();
-
-                            if !gpm
-                                .try_delete(old_vaddr.try_into().unwrap(), rom_size as usize)
-                                .is_ok()
-                            {
-                                // warn!("delete rom bar: can not found 0x{:x}", old_vaddr);
-                            }
-                            gpm.try_insert_quiet(MemoryRegion::new_with_offset_mapper(
-                                new_vaddr as GuestPhysAddr,
+                            let zone_id = pci_dev_zone_id(&dev)?;
+                            let zone = find_zone(zone_id)
+                                .ok_or_else(|| hv_err!(EINVAL, "zone not found"))?;
+                            let mut inner = zone.write();
+                            guest_map_mmio_bar_gpm(
+                                &mut inner,
+                                zone_id,
+                                &dev,
+                                "rom",
+                                0,
+                                old_vaddr,
+                                new_vaddr,
                                 paddr as HostPhysAddr,
-                                rom_size as _,
-                                MemFlags::READ | MemFlags::WRITE,
-                            ))?;
-                            drop(guard);
-                            /* after update gpm, mem barrier is needed
-                             */
-                            #[cfg(target_arch = "aarch64")]
-                            unsafe {
-                                core::arch::asm!("isb");
-                                core::arch::asm!("tlbi vmalls12e1is");
-                                core::arch::asm!("dsb nsh");
-                            }
-                            /* after update gpm, need to flush iommu table
-                             * in x86_64
-                             */
-                            #[cfg(all(target_arch = "x86_64", feature = "intel_vtd"))]
-                            {
-                                let vbdf = dev.get_vbdf();
-                                crate::device::iommu::flush(
-                                    this_zone_id(),
-                                    vbdf.bus,
-                                    (vbdf.device << 3) + vbdf.function,
-                                );
-                            }
+                                rom_size,
+                            )?;
                             #[cfg(target_arch = "riscv64")]
                             unsafe {
                                 // TOOD: add remote fence support (using sbi rfence spec?)
