@@ -23,7 +23,7 @@ pub const BOARD_NCPUS: usize = 4;
 
 pub const ROOT_ZONE_DTB_ADDR: u64 = 0x10000f000;
 pub const ROOT_ZONE_KERNEL_ADDR: u64 = 0x200000;
-pub const ROOT_ZONE_ENTRY: u64 = 0x9000000000dde000;
+pub const ROOT_ZONE_ENTRY: u64 = 0x9000000000dc7000;
 pub const ROOT_ZONE_CPUS: u64 = 1 << 0;
 
 pub const ROOT_ZONE_NAME: &str = "root-linux-la64";
@@ -218,8 +218,7 @@ pub const ROOT_ARCH_ZONE_CONFIG: HvArchZoneConfig = HvArchZoneConfig { dummy: 0 
 /// | 3   | 1        | 0    | 244     |
 pub const IVC_MSIX_SLOTS_CPU0: u32 = 3;
 pub const IVC_MSIX_SLOTS_PER_OTHER_CPU: u32 = 1;
-pub const IVC_MSIX_EXTIOI_COUNT: u32 =
-    IVC_MSIX_SLOTS_CPU0 + IVC_MSIX_SLOTS_PER_OTHER_CPU * 3;
+pub const IVC_MSIX_EXTIOI_COUNT: u32 = IVC_MSIX_SLOTS_CPU0 + IVC_MSIX_SLOTS_PER_OTHER_CPU * 3;
 pub const IVC_MSIX_SLOT_IN_BANK: u32 = 36;
 pub const IVC_MSIX_EXTIOI_BASE: u32 = 64 + IVC_MSIX_SLOT_IN_BANK; // 100 on CPU0
 
@@ -321,9 +320,9 @@ pub const ROOT_PCI_DEVS: [HvPciDevConfig; 26] = [
     pci_dev!(0x0, 0x2, 0x0, 0x0, VpciDevType::Physical), // 02:00.0
     pci_dev!(0x0, 0x5, 0x0, 0x0, VpciDevType::Physical), // 05:00.0
     pci_dev!(0x0, 0x6, 0x0, 0x0, VpciDevType::Physical), // 06:00.0
-    // pci_dev!(0x0, 0x6, 0x0, 0x1, VpciDevType::Physical), // 06:00.1
-    // pci_dev!(0x0, 0x6, 0x0, 0x2, VpciDevType::Physical), // 06:00.2
-    // pci_dev!(0x0, 0x6, 0x0, 0x3, VpciDevType::Physical), // 06:00.3
+                                                         // pci_dev!(0x0, 0x6, 0x0, 0x1, VpciDevType::Physical), // 06:00.1
+                                                         // pci_dev!(0x0, 0x6, 0x0, 0x2, VpciDevType::Physical), // 06:00.2
+                                                         // pci_dev!(0x0, 0x6, 0x0, 0x3, VpciDevType::Physical), // 06:00.3
 ];
 
 // bus << 8 | dev << 5 | func << 3
