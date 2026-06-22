@@ -24,7 +24,7 @@ pub const BOARD_NCPUS: usize = 4;
 pub const ROOT_ZONE_DTB_ADDR: u64 = 0x10000f000;
 pub const ROOT_ZONE_KERNEL_ADDR: u64 = 0x200000;
 pub const ROOT_ZONE_ENTRY: u64 = 0x9000000000dc7000;
-pub const ROOT_ZONE_CPUS: u64 = 1 << 0;
+pub const ROOT_ZONE_CPUS: u64 = (1 << 0) | (1 << 1);
 
 pub const ROOT_ZONE_NAME: &str = "root-linux-la64";
 

@@ -3,7 +3,8 @@
     "name": "linux1",
     "zone_id": 1,
     "cpus": [
-        1
+        2,
+        3
     ],
     "memory_regions": [
         {
