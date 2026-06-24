@@ -1294,9 +1294,9 @@ fn handle_interrupt(is: usize) {
 
     // Handle timer interrupts
     if is & TIMER_BIT != 0 {
-        warn!("Timer interrupt received");
+        debug!("Timer interrupt received");
         loongArch64::register::ticlr::clear_timer_interrupt();
-        crate::device::irqchip::ls7a2000::clear_hwi_injected_irq();
+        crate::device::irqchip::ls7a2000::clear_hwi_injected_irq_if_needed();
         return;
     }
 
@@ -1352,7 +1352,7 @@ fn emulate_cpucfg(ins: usize, ctx: &mut ZoneContext) {
 
     const MAX_CPUCFG_REGS: usize = 21;
 
-    info!(
+    debug!(
         "cpucfg emulation, target cpucfg index is {:#x}",
         cpucfg_target_idx
     );
@@ -1389,19 +1389,19 @@ fn emulate_csrx(ins: usize, ctx: &mut ZoneContext) {
     match ty {
         0 => {
             // csrrd
-            info!("csrrd emulation for CSR {:#x}", csr);
+            debug!("csrrd emulation for CSR {:#x}", csr);
             ctx.x[rd] = 0;
             // just set it to 0
         }
         1 => {
             // csrwr
-            info!("csrwr emulation for CSR {:#x}", csr);
+            debug!("csrwr emulation for CSR {:#x}", csr);
             ctx.x[rd] = 0;
             // do nothing to GCSR, but we also need to set rd to 0
         }
         _ => {
             // csrxchg
-            info!("csrxchg emulation for CSR {:#x}", csr);
+            debug!("csrxchg emulation for CSR {:#x}", csr);
             ctx.x[rd] = 0;
             // do nothing to GCSR, but we also need to set rd to 0
         }
