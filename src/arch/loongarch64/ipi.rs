@@ -15,7 +15,7 @@
 //      Yulong Han <wheatfox17@icloud.com>
 //
 use crate::arch::cpu::this_cpu_id;
-use crate::consts::IPI_EVENT_CLEAR_INJECT_IRQ;
+use crate::consts::{IPI_EVENT_CLEAR_INJECT_IRQ, IPI_EVENT_SEND_IPI};
 use crate::device::common::MMIODerefWrapper;
 use core::arch::asm;
 use core::ptr::write_volatile;
@@ -350,6 +350,10 @@ pub fn arch_check_events(event: Option<usize>) {
             // clear the injected IPI interrupt
             use crate::device::irqchip::ls7a2000::clear_hwi_injected_irq;
             clear_hwi_injected_irq();
+        }
+        Some(IPI_EVENT_SEND_IPI) => {
+            use crate::device::irqchip::ls7a2000::inject_irq;
+            inject_irq(12, false);
         }
         _ => {
             panic!("arch_check_events: unhandled event: {:?}", event);

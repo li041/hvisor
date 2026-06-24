@@ -155,6 +155,27 @@ pub fn clear_hwi_injected_irq() {
     tcfg::set_en(false); // stop timer
 }
 
+pub fn clear_injected_irq(_irq: usize) {
+    debug!("loongarch64: clear_injected_irq: _irq: {}", _irq);
+    if _irq > INT_IPI {
+        error!("loongarch64: clear_injected_irq: _irq > {}, not valid", INT_IPI);
+        return;
+    }
+    let bit = 1 << _irq;
+    if _irq >= INT_HWI0 && _irq <= INT_HWI7 {
+        use crate::arch::register::gintc;
+        gintc::set_hwis(gintc::read().hwis() & !(bit >> INT_HWI0));
+    } else {
+        let mut gcsr_estat = read_gcsr_estat();
+        gcsr_estat &= !bit;
+        write_gcsr_estat(gcsr_estat);
+    }
+
+    let mut status = GLOBAL_IRQ_INJECT_STATUS.lock();
+    status.cpu_status[this_cpu_id()].status = InjectionStatus::Idle;
+    tcfg::set_en(false);
+}
+
 pub fn clear_hwi_injected_irq_if_needed() {
     {
         let status = GLOBAL_IRQ_INJECT_STATUS.lock();
