@@ -33,10 +33,6 @@ use spin::Mutex;
 pub mod chip;
 
 pub fn primary_init_early() {
-    if this_cpu_id() != 0 {
-        info!("loongarch64: irqchip: primary_init_early: do nothing on secondary cpus");
-        return;
-    }
     info!("loongarch64: irqchip: primary_init_early: checking iochip configs");
     print_chip_info();
     csr_disable_new_codec();
@@ -157,6 +153,17 @@ pub fn clear_hwi_injected_irq() {
     status.cpu_status[this_cpu_id()].status = InjectionStatus::Idle;
 
     tcfg::set_en(false); // stop timer
+}
+
+pub fn clear_hwi_injected_irq_if_needed() {
+    {
+        let status = GLOBAL_IRQ_INJECT_STATUS.lock();
+        if status.cpu_status[this_cpu_id()].status != InjectionStatus::Injecting {
+            tcfg::set_en(false);
+            return;
+        }
+    }
+    clear_hwi_injected_irq();
 }
 
 impl Zone {

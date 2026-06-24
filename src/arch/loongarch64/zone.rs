@@ -26,7 +26,7 @@ use crate::{
         mmio_generic_handler, mmio_perform_access, GuestPhysAddr, HostPhysAddr, MMIOAccess,
         MemFlags, MemoryRegion, MemorySet,
     },
-    zone::Zone,
+    zone::{is_this_root_zone, Zone},
     PHY_TO_DMW_UNCACHED,
 };
 use alloc::boxed::Box;
@@ -513,8 +513,8 @@ fn handle_extioi_mapping_mmio(mmio: &mut MMIOAccess, base_addr: usize, size: usi
         return Ok(());
     }
 
-    // if this is nonroot, we ignore the mmio
-    if this_cpu_id() != 0 {
+    // Non-root zones see a virtual CPU0 even when running on another physical CPU.
+    if !is_this_root_zone() {
         info!("nonroot's write to extioi mapping regs, ignored");
         return Ok(());
     }
@@ -649,21 +649,21 @@ pub fn loongarch_generic_mmio_handler(mmio: &mut MMIOAccess, arg: usize) -> HvRe
     } else if is_in_mmio_range!(mmio.address, EXTIOI_SR_CORE_BASE, EXTIOI_SR_CORE_SIZE) {
         ret = handle_extioi_status_mmio(mmio, EXTIOI_SR_CORE_BASE, EXTIOI_SR_CORE_SIZE);
     } else if is_in_mmio_range!(mmio.address, EXTIOI_ENABLE_BASE, EXTIOI_ENABLE_SIZE) {
-        if this_cpu_id() != 0 && mmio.is_write {
+        if !is_this_root_zone() && mmio.is_write {
             info!("nonroot's write to extioi enable regs, ignored");
             return Ok(());
         } else {
             ret = handle_generic_mmio(mmio, BASE_ADDR);
         }
     } else if is_in_mmio_range!(mmio.address, EXTIOI_BOUNCE_BASE, EXTIOI_BOUNCE_SIZE) {
-        if this_cpu_id() != 0 && mmio.is_write {
+        if !is_this_root_zone() && mmio.is_write {
             info!("nonroot's write to extioi bounce regs, ignored");
             return Ok(());
         } else {
             ret = handle_generic_mmio(mmio, BASE_ADDR);
         }
     } else if is_in_mmio_range!(mmio.address, EXTIOI_NODE_SEL_BASE, EXTIOI_NODE_SEL_SIZE) {
-        if this_cpu_id() != 0 && mmio.is_write {
+        if !is_this_root_zone() && mmio.is_write {
             info!("nonroot's write to extioi node sel regs, ignored");
             return Ok(());
         } else {
