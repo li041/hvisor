@@ -22,7 +22,7 @@ use crate::{
     },
     config::*,
     consts::{IPI_EVENT_SEND_IPI, MAX_CPU_NUM, PAGE_SIZE},
-    cpu_data::get_cpu_data,
+    cpu_data::{get_cpu_data, this_cpu_data},
     device::virtio_trampoline::mmio_virtio_handler,
     error::{HvError, HvResult},
     event::{send_event, IPI_EVENT_WAKEUP},
@@ -547,7 +547,7 @@ fn handle_extioi_mapping_mmio(mmio: &mut MMIOAccess, base_addr: usize, size: usi
 
     // Non-root zones see a virtual CPU0 even when running on another physical CPU.
     if !is_this_root_zone() {
-        info!("nonroot's write to extioi mapping regs, ignored");
+        debug!("nonroot's write to extioi mapping regs, ignored");
         return Ok(());
     }
 
@@ -619,23 +619,34 @@ fn handle_generic_mmio(mmio: &mut MMIOAccess, base_addr: usize) -> HvResult {
     Ok(())
 }
 
-fn virtual_ipi_target_cpu(raw: usize) -> Option<usize> {
-    let target = raw;
-    if target < MAX_CPU_NUM {
-        Some(target)
+fn this_guest_cpu_id() -> usize {
+    this_cpu_data()
+        .zone
+        .as_ref()
+        .and_then(|zone| zone.read().cpu_set().physical_to_virtual(this_cpu_id()))
+        .unwrap_or(0)
+}
+
+fn guest_cpu_to_physical_cpu(guest_cpu: usize) -> Option<usize> {
+    let zone = this_cpu_data().zone.as_ref()?;
+    let cpu_set = zone.read().cpu_set();
+    // Some LoongArch guests use physical CPU ids from the DT, while others use
+    // dense vCPU ids. Accept both forms and normalize to a physical CPU id.
+    if cpu_set.contains_cpu(guest_cpu) {
+        Some(guest_cpu)
     } else {
-        None
+        cpu_set.virtual_to_physical(guest_cpu)
     }
 }
 
-fn virtual_ipi_send(target_cpu: usize, ipi_bits: u32) -> HvResult {
-    if target_cpu >= MAX_CPU_NUM {
+fn virtual_ipi_send(target_guest_cpu: usize, ipi_bits: u32) -> HvResult {
+    let Some(target_cpu) = guest_cpu_to_physical_cpu(target_guest_cpu) else {
         warn!(
-            "loongarch64: guest IPI target CPU {} out of range",
-            target_cpu
+            "loongarch64: guest IPI target vCPU {} out of range",
+            target_guest_cpu
         );
         return Ok(());
-    }
+    };
 
     if ipi_bits & SMP_BOOT_CPU as u32 != 0 {
         let entry = VIRTUAL_IPI_MAILBOX[target_cpu * 4].load(Ordering::Acquire) as usize;
@@ -643,15 +654,15 @@ fn virtual_ipi_send(target_cpu: usize, ipi_bits: u32) -> HvResult {
         let _lock = target_data.ctrl_lock.lock();
         if !target_data.arch_cpu.power_on {
             debug!(
-                "loongarch64: guest boots vCPU{} through IPI, entry={:#x}",
-                target_cpu, entry
+                "loongarch64: guest boots vCPU{}(pCPU{}) through IPI, entry={:#x}",
+                target_guest_cpu, target_cpu, entry
             );
             target_data.cpu_on_entry = entry;
             send_event(target_cpu, SGI_IPI_ID as usize, IPI_EVENT_WAKEUP);
         } else {
             warn!(
-                "loongarch64: guest tried to boot running vCPU{}",
-                target_cpu
+                "loongarch64: guest tried to boot running vCPU{}(pCPU{})",
+                target_guest_cpu, target_cpu
             );
         }
     }
@@ -660,8 +671,8 @@ fn virtual_ipi_send(target_cpu: usize, ipi_bits: u32) -> HvResult {
     if pending != 0 {
         debug!(
             "loongarch64: guest IPI send cpu{} -> cpu{}, bits={:#x}",
-            this_cpu_id(),
-            target_cpu,
+            this_guest_cpu_id(),
+            target_guest_cpu,
             pending
         );
         VIRTUAL_IPI_STATUS[target_cpu].fetch_or(pending, Ordering::AcqRel);
@@ -687,8 +698,8 @@ fn handle_ipi_any_send_mmio(mmio: &mut MMIOAccess) -> HvResult {
 
     let value = mmio.value as u32;
     let ipi_id = value & 0x1f;
-    let target_cpu = ((value >> 16) & 0x3ff) as usize;
-    virtual_ipi_send(target_cpu, 1u32 << ipi_id)
+    let target_guest_cpu = ((value >> 16) & 0x3ff) as usize;
+    virtual_ipi_send(target_guest_cpu, 1u32 << ipi_id)
 }
 
 fn handle_ipi_mail_send_mmio(mmio: &mut MMIOAccess) -> HvResult {
@@ -705,16 +716,24 @@ fn handle_ipi_mail_send_mmio(mmio: &mut MMIOAccess) -> HvResult {
     }
 
     let value = mmio.value as u64;
-    let target_cpu = ((value >> 16) & 0x3ff) as usize;
+    let target_guest_cpu = ((value >> 16) & 0x3ff) as usize;
     let box_half = ((value >> 2) & 0x7) as usize;
     let mailbox = box_half / 2;
     let is_high = (box_half & 1) != 0;
     let data = (value >> 32) as u32;
 
-    if target_cpu >= MAX_CPU_NUM || mailbox >= 4 {
+    let Some(target_cpu) = guest_cpu_to_physical_cpu(target_guest_cpu) else {
         warn!(
-            "loongarch64: invalid guest mailbox send target_cpu={}, mailbox={}",
-            target_cpu, mailbox
+            "loongarch64: invalid guest mailbox send target_vcpu={}, mailbox={}",
+            target_guest_cpu, mailbox
+        );
+        return Ok(());
+    };
+
+    if mailbox >= 4 {
+        warn!(
+            "loongarch64: invalid guest mailbox send target_vcpu={}, mailbox={}",
+            target_guest_cpu, mailbox
         );
         return Ok(());
     }
@@ -736,15 +755,15 @@ fn handle_ipi_mail_send_mmio(mmio: &mut MMIOAccess) -> HvResult {
 fn handle_ipi_mmio(mmio: &mut MMIOAccess) -> HvResult {
     let cpu_block = (mmio.address - offset(IPI_REG_BASE)) / 0x100;
     let reg = (mmio.address - offset(IPI_REG_BASE)) % 0x100;
-    let cpu = if cpu_block == 0 {
-        this_cpu_id()
+    let guest_cpu = if cpu_block == 0 {
+        this_guest_cpu_id()
     } else {
         cpu_block
     };
-    let Some(cpu) = virtual_ipi_target_cpu(cpu) else {
+    let Some(cpu) = guest_cpu_to_physical_cpu(guest_cpu) else {
         warn!(
-            "loongarch64: guest IPI register access for invalid CPU {}",
-            cpu
+            "loongarch64: guest IPI register access for invalid vCPU {}",
+            guest_cpu
         );
         if !mmio.is_write {
             mmio.value = 0;
@@ -759,8 +778,8 @@ fn handle_ipi_mmio(mmio: &mut MMIOAccess) -> HvResult {
                 if mmio.value != 0 {
                     debug!(
                         "loongarch64: guest cpu{} reads IPI_STATUS cpu{} = {:#x}",
-                        this_cpu_id(),
-                        cpu,
+                        this_guest_cpu_id(),
+                        guest_cpu,
                         mmio.value
                     );
                 }
@@ -775,7 +794,7 @@ fn handle_ipi_mmio(mmio: &mut MMIOAccess) -> HvResult {
         }
         IPI_SET => {
             if mmio.is_write {
-                virtual_ipi_send(cpu, mmio.value as u32)?;
+                virtual_ipi_send(guest_cpu, mmio.value as u32)?;
             } else {
                 mmio.value = 0;
             }
@@ -790,8 +809,8 @@ fn handle_ipi_mmio(mmio: &mut MMIOAccess) -> HvResult {
                 if old != 0 || mmio.value != 0 {
                     debug!(
                         "loongarch64: guest cpu{} clears IPI_STATUS cpu{}, mask={:#x}, old={:#x}",
-                        this_cpu_id(),
-                        cpu,
+                        this_guest_cpu_id(),
+                        guest_cpu,
                         mmio.value,
                         old
                     );
@@ -888,21 +907,21 @@ pub fn loongarch_generic_mmio_handler(mmio: &mut MMIOAccess, arg: usize) -> HvRe
         ret = handle_extioi_status_mmio(mmio, EXTIOI_SR_CORE_BASE, EXTIOI_SR_CORE_SIZE);
     } else if is_in_mmio_range!(mmio.address, EXTIOI_ENABLE_BASE, EXTIOI_ENABLE_SIZE) {
         if !is_this_root_zone() && mmio.is_write {
-            info!("nonroot's write to extioi enable regs, ignored");
+            debug!("nonroot's write to extioi enable regs, ignored");
             return Ok(());
         } else {
             ret = handle_generic_mmio(mmio, BASE_ADDR);
         }
     } else if is_in_mmio_range!(mmio.address, EXTIOI_BOUNCE_BASE, EXTIOI_BOUNCE_SIZE) {
         if !is_this_root_zone() && mmio.is_write {
-            info!("nonroot's write to extioi bounce regs, ignored");
+            debug!("nonroot's write to extioi bounce regs, ignored");
             return Ok(());
         } else {
             ret = handle_generic_mmio(mmio, BASE_ADDR);
         }
     } else if is_in_mmio_range!(mmio.address, EXTIOI_NODE_SEL_BASE, EXTIOI_NODE_SEL_SIZE) {
         if !is_this_root_zone() && mmio.is_write {
-            info!("nonroot's write to extioi node sel regs, ignored");
+            debug!("nonroot's write to extioi node sel regs, ignored");
             return Ok(());
         } else {
             ret = handle_generic_mmio(mmio, BASE_ADDR);

@@ -262,6 +262,14 @@ impl CpuSet {
     pub fn iter_except<'a>(&'a self, id: usize) -> impl Iterator<Item = usize> + 'a {
         (0..=self.max_cpu_id).filter(move |&i| self.contains_cpu(i) && i != id)
     }
+    /// Translate a physical CPU id to its dense index inside this CPU set.
+    pub fn physical_to_virtual(&self, id: usize) -> Option<usize> {
+        self.iter().position(|cpu_id| cpu_id == id)
+    }
+    /// Translate a dense CPU-set index back to the physical CPU id.
+    pub fn virtual_to_physical(&self, id: usize) -> Option<usize> {
+        self.iter().nth(id)
+    }
 }
 
 #[test_case]
@@ -286,4 +294,8 @@ fn test_cpuset() {
     assert_eq!(cpuset.first_cpu(), Some(0));
     assert_eq!(cpuset.iter().collect::<Vec<_>>(), vec![0, 3]);
     assert_eq!(cpuset.iter_except(0).collect::<Vec<_>>(), vec![3]);
+    assert_eq!(cpuset.physical_to_virtual(0), Some(0));
+    assert_eq!(cpuset.physical_to_virtual(3), Some(1));
+    assert_eq!(cpuset.virtual_to_physical(0), Some(0));
+    assert_eq!(cpuset.virtual_to_physical(1), Some(3));
 }
