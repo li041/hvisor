@@ -623,20 +623,15 @@ fn this_guest_cpu_id() -> usize {
     this_cpu_data()
         .zone
         .as_ref()
-        .and_then(|zone| zone.read().cpu_set().physical_to_virtual(this_cpu_id()))
+        .and_then(|zone| zone.read().phys_to_guest_cpu(this_cpu_id()))
         .unwrap_or(0)
 }
 
 fn guest_cpu_to_physical_cpu(guest_cpu: usize) -> Option<usize> {
-    let zone = this_cpu_data().zone.as_ref()?;
-    let cpu_set = zone.read().cpu_set();
-    // Some LoongArch guests use physical CPU ids from the DT, while others use
-    // dense vCPU ids. Accept both forms and normalize to a physical CPU id.
-    if cpu_set.contains_cpu(guest_cpu) {
-        Some(guest_cpu)
-    } else {
-        cpu_set.virtual_to_physical(guest_cpu)
-    }
+    this_cpu_data()
+        .zone
+        .as_ref()
+        .and_then(|zone| zone.read().guest_to_phys_cpu(guest_cpu))
 }
 
 fn virtual_ipi_send(target_guest_cpu: usize, ipi_bits: u32) -> HvResult {
