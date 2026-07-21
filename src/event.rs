@@ -22,7 +22,7 @@ use crate::{
         IPI_EVENT_UPDATE_HART_LINE, IPI_EVENT_VCPU_SUSPEND, MAX_CPU_NUM,
     },
     cpu_data::{this_cpu_data, vcpu_suspend, CpuSet},
-    device::{irqchip::inject_irq, virtio_trampoline::handle_virtio_irq},
+    device::irqchip::inject_irq,
     platform::IRQ_WAKEUP_VIRTIO_DEVICE,
 };
 #[cfg(virtio_pci)]
@@ -145,7 +145,10 @@ fn handle_event(event: Option<usize>) -> bool {
             false
         }
         Some(IPI_EVENT_VIRTIO_INJECT_IRQ) => {
-            handle_virtio_irq();
+            #[cfg(target_arch = "loongarch64")]
+            crate::device::irqchip::ls7a2000::sync_guest_irqs();
+            #[cfg(not(target_arch = "loongarch64"))]
+            crate::device::virtio_trampoline::handle_virtio_irq();
             true
         }
         Some(IPI_EVENT_WAKEUP_VIRTIO_DEVICE) => {

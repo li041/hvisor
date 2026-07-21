@@ -21,19 +21,19 @@ use crate::config::HvZoneConfig;
 use crate::consts::{INVALID_ADDRESS, MAX_CPU_NUM, MAX_WAIT_TIMES, PAGE_SIZE};
 use crate::cpu_data::{get_cpu_data, PerCpu, VcpuState};
 use crate::device::virtio_trampoline::{
-    VirtioPCIHypercallOp, MAX_DEVS, VIRTIO_BRIDGE, VIRTIO_IRQS, VIRTIO_PCI_BRIDGE,
-    VIRTIO_PCI_HYPERCALL_VERSION,
+    VirtioPCIHypercallOp, VIRTIO_BRIDGE, VIRTIO_PCI_BRIDGE, VIRTIO_PCI_HYPERCALL_VERSION,
 };
+#[cfg(not(target_arch = "loongarch64"))]
+use crate::device::virtio_trampoline::{MAX_DEVS, VIRTIO_IRQS};
 use crate::error::HvResult;
 use crate::pci::pci_config::GLOBAL_PCIE_LIST;
 use crate::zone::{
     add_zone, all_zones_info, find_zone, is_this_root_zone, remove_zone, zone_create, ZoneInfo,
 };
 
-use crate::event::{
-    send_event, IPI_EVENT_SHUTDOWN, IPI_EVENT_VIRTIO_INJECT_IRQ, IPI_EVENT_VIRTIO_PCI_DONE,
-    IPI_EVENT_WAKEUP,
-};
+#[cfg(not(target_arch = "loongarch64"))]
+use crate::event::IPI_EVENT_VIRTIO_INJECT_IRQ;
+use crate::event::{send_event, IPI_EVENT_SHUTDOWN, IPI_EVENT_VIRTIO_PCI_DONE, IPI_EVENT_WAKEUP};
 use core::convert::TryFrom;
 use numeric_enum_macro::numeric_enum;
 
@@ -150,6 +150,7 @@ impl<'a> HyperCall<'a> {
             );
         }
         let mut res_agent = VIRTIO_BRIDGE.res_agent();
+        #[cfg(not(target_arch = "loongarch64"))]
         let mut map_irq = VIRTIO_IRQS.lock();
         while !res_agent.is_empty() {
             let (_res_front, irq_id, target_zone) = res_agent.peek_front();
@@ -161,21 +162,35 @@ impl<'a> HyperCall<'a> {
                 }
             };
 
-            let irq_list = map_irq.entry(target_cpu).or_insert([0; MAX_DEVS + 1]);
-
-            self.wait_for_interrupt(irq_list);
-            if !irq_list[1..=irq_list[0] as usize].contains(&irq_id) {
-                let len = irq_list[0] as usize;
-                assert!(len + 1 < MAX_DEVS);
-                irq_list[len + 1] = irq_id;
-                irq_list[0] += 1;
-                send_event(
-                    target_cpu as _,
-                    SGI_IPI_ID as _,
-                    IPI_EVENT_VIRTIO_INJECT_IRQ,
+            #[cfg(target_arch = "loongarch64")]
+            {
+                crate::device::irqchip::ls7a2000::set_guest_irq_line(
+                    target_cpu,
+                    irq_id as usize,
+                    true,
                 );
+                res_agent.advance_front();
+                continue;
             }
 
+            #[cfg(not(target_arch = "loongarch64"))]
+            {
+                let irq_list = map_irq.entry(target_cpu).or_insert([0; MAX_DEVS + 1]);
+                self.wait_for_interrupt(irq_list);
+                if !irq_list[1..=irq_list[0] as usize].contains(&irq_id) {
+                    let len = irq_list[0] as usize;
+                    assert!(len + 1 < MAX_DEVS);
+                    irq_list[len + 1] = irq_id;
+                    irq_list[0] += 1;
+                    send_event(
+                        target_cpu as _,
+                        SGI_IPI_ID as _,
+                        IPI_EVENT_VIRTIO_INJECT_IRQ,
+                    );
+                }
+            }
+
+            #[cfg(not(target_arch = "loongarch64"))]
             res_agent.advance_front();
         }
         drop(res_agent);
@@ -237,6 +252,7 @@ impl<'a> HyperCall<'a> {
             return hv_result_err!(EINVAL);
         }
         // avoid virtio daemon send sgi to the shutdowning zone
+        #[cfg(not(target_arch = "loongarch64"))]
         let mut map_irq = VIRTIO_IRQS.lock();
 
         let zone = match find_zone(zone_id as _) {
@@ -253,8 +269,11 @@ impl<'a> HyperCall<'a> {
         zone_w.cpu_set().iter().for_each(|cpu_id| {
             let _lock = get_cpu_data(cpu_id).ctrl_lock.lock();
             get_cpu_data(cpu_id).cpu_on_entry = INVALID_ADDRESS;
+            #[cfg(target_arch = "loongarch64")]
+            crate::device::irqchip::ls7a2000::clear_guest_irq_lines(cpu_id);
             send_event(cpu_id, SGI_IPI_ID as _, IPI_EVENT_SHUTDOWN);
             // set the virtio irq list's len to 0
+            #[cfg(not(target_arch = "loongarch64"))]
             if let Some(irq_list) = map_irq.get_mut(&cpu_id) {
                 irq_list[0] = 0;
             }
