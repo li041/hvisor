@@ -67,6 +67,13 @@ endmenu
 menu "RISC-V options"
 	depends on ARCH_RISCV64
 
+config RVA23
+	bool "RVA23 profile"
+	default n
+	# TODO: RVA23 will likely become the common RISC-V server profile. If
+	# needed, split its individual extensions into separate feature options
+	# later for platforms that do not strictly implement the RVA23 profile.
+
 config SSTC
 	bool "Sstc"
 	default n
