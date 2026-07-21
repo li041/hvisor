@@ -52,7 +52,7 @@ impl<'a> HyperCall<'a> {
 
     pub fn check_cpu_id(&self) {
         let cpuid = this_cpu_id();
-        assert_eq!(cpuid, 0);
+        trace!("CPU ID: {} Start Zone", cpuid);
     }
 
     pub fn hv_virtio_get_irq(&self, virtio_irq: *mut u32) -> HyperCallResult {

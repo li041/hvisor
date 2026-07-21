@@ -834,7 +834,7 @@ pub fn zone_create(config: &HvZoneConfig) -> HvResult<Arc<Zone>> {
     zone.mmio_init(&config.arch_config);
 
     let mut cpu_num = 0;
-    for cpu_id in config.cpus().iter() {
+    for (guest_cpu, cpu_id) in config.cpus().iter().enumerate() {
         if let Some(existing_zone) = get_cpu_data(*cpu_id as _).zone.clone() {
             return hv_result_err!(
                 EBUSY,
@@ -848,9 +848,9 @@ pub fn zone_create(config: &HvZoneConfig) -> HvResult<Arc<Zone>> {
         let cpu_id = *cpu_id as usize;
         let mut zone_inner = zone.write();
         zone_inner.cpu_set_mut().set_bit(cpu_id);
-        // The current config format only lists pCPUs. Use an identity guest CPU
-        // map for now; future explicit guest-id configs only need to change this.
-        zone_inner.map_cpu(cpu_id, cpu_id);
+        // The config lists physical CPUs, while guests use dense CPU ids from
+        // zero. Preserve that distinction for non-root SMP zones.
+        zone_inner.map_cpu(guest_cpu, cpu_id);
         cpu_num += 1;
     }
     zone.write().set_cpu_num(cpu_num);
