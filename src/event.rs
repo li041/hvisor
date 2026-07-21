@@ -22,7 +22,7 @@ use crate::{
         IPI_EVENT_UPDATE_HART_LINE, IPI_EVENT_VCPU_SUSPEND, MAX_CPU_NUM,
     },
     cpu_data::{this_cpu_data, vcpu_suspend, CpuSet},
-    device::{irqchip::inject_irq, virtio_trampoline::handle_virtio_irq},
+    device::irqchip::{handle_virtio_irq_event, inject_irq},
     platform::IRQ_WAKEUP_VIRTIO_DEVICE,
 };
 #[cfg(virtio_pci)]
@@ -104,11 +104,18 @@ fn handle_event(event: Option<usize>) -> bool {
             false
         }
         Some(IPI_EVENT_SHUTDOWN) => {
+            #[cfg(target_arch = "loongarch64")]
+            {
+                // Shutdown coalescing may have discarded the queued IRQ-sync
+                // event. Apply the cleared software bitmap before idling so the
+                // next zone cannot inherit stale GINTC.VIP bits.
+                crate::device::irqchip::ls7a2000::sync_guest_irqs();
+            }
             cpu_data.arch_cpu.idle();
             false
         }
         Some(IPI_EVENT_VIRTIO_INJECT_IRQ) => {
-            handle_virtio_irq();
+            handle_virtio_irq_event();
             true
         }
         Some(IPI_EVENT_WAKEUP_VIRTIO_DEVICE) => {
