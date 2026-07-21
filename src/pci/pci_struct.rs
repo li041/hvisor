@@ -2027,15 +2027,8 @@ impl<B: BarAllocator> Iterator for PciIterator<B> {
                         #[cfg(not(no_pcie_bar_realloc))]
                         let next_bus = parent.subordinate_bus + 1;
 
-                        let bdf = Bdf::new(domain, next_bus, 0, 0);
-                        // Use the current bridge's own bus as the immediate parent bus for
-                        // CFG address computation. For multi-level bridges (especially on
-                        // DWC), using parent.primary_bus (the upstream of the *parent*)
-                        // would select the wrong CFG0/CFG1 path and fail to reach devices
-                        // behind deeper bridges.
-                        let immediate_parent_bus = parent.bus;
                         Some(self.get_bridge().next_bridge(
-                            self.address(immediate_parent_bus, bdf),
+                            node.get_base(),
                             node.has_only_one_child(),
                             self.is_mulitple_function,
                             self.function,
