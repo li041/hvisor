@@ -515,6 +515,19 @@ static VIRTUAL_IPI_MAILBOX: [AtomicU64; MAX_CPU_NUM * 4] = {
     const C: AtomicU64 = AtomicU64::new(0);
     [C; MAX_CPU_NUM * 4]
 };
+const IOCSR_IPI_SEND_BLOCKING: u32 = 1 << 31;
+
+pub fn reset_virtual_ipi_state(cpu: usize) {
+    if cpu >= MAX_CPU_NUM {
+        return;
+    }
+
+    VIRTUAL_IPI_STATUS[cpu].store(0, Ordering::Release);
+    VIRTUAL_IPI_ENABLE[cpu].store(0xffff_ffff, Ordering::Release);
+    for mailbox in 0..4 {
+        VIRTUAL_IPI_MAILBOX[cpu * 4 + mailbox].store(0, Ordering::Release);
+    }
+}
 
 fn handle_uart_mmio(mmio: &mut MMIOAccess, base_addr: usize) -> HvResult {
     mmio_perform_access(base_addr, mmio);
@@ -634,7 +647,26 @@ fn guest_cpu_to_physical_cpu(guest_cpu: usize) -> Option<usize> {
         .and_then(|zone| zone.read().guest_to_phys_cpu(guest_cpu))
 }
 
-fn virtual_ipi_send(target_guest_cpu: usize, ipi_bits: u32) -> HvResult {
+pub fn sync_virtual_ipi_line() {
+    let cpu = this_cpu_id();
+    let status = VIRTUAL_IPI_STATUS[cpu].load(Ordering::Acquire);
+
+    if status != 0 {
+        crate::device::irqchip::ls7a2000::inject_irq(12, false);
+    } else {
+        crate::device::irqchip::ls7a2000::clear_injected_irq(12);
+    }
+}
+
+fn sync_or_notify_virtual_ipi_line(cpu: usize) {
+    if cpu == this_cpu_id() {
+        sync_virtual_ipi_line();
+    } else {
+        send_event(cpu, SGI_IPI_ID as usize, IPI_EVENT_SEND_IPI);
+    }
+}
+
+fn virtual_ipi_send(target_guest_cpu: usize, ipi_bits: u32, blocking: bool) -> HvResult {
     let Some(target_cpu) = guest_cpu_to_physical_cpu(target_guest_cpu) else {
         warn!(
             "loongarch64: guest IPI target vCPU {} out of range",
@@ -664,19 +696,26 @@ fn virtual_ipi_send(target_guest_cpu: usize, ipi_bits: u32) -> HvResult {
     }
 
     let pending = ipi_bits & !(SMP_BOOT_CPU as u32);
-    if pending != 0 {
-        debug!(
-            "loongarch64: guest IPI send cpu{} -> cpu{}, bits={:#x}",
-            this_guest_cpu_id(),
-            target_guest_cpu,
-            pending
-        );
-        VIRTUAL_IPI_STATUS[target_cpu].fetch_or(pending, Ordering::AcqRel);
-        if target_cpu == this_cpu_id() {
-            crate::device::irqchip::ls7a2000::inject_irq(12, false);
-        } else {
-            send_event(target_cpu, SGI_IPI_ID as usize, IPI_EVENT_SEND_IPI);
+    if pending == 0 {
+        if blocking {
+            fence(Ordering::SeqCst);
         }
+        return Ok(());
+    }
+
+    // Match the in-kernel LoongArch IPI model: commit the status update before
+    // returning from the send write, merge repeated actions, and only notify on
+    // the zero-to-nonzero transition. Bit 31 does not wait for guest IPI_CLEAR.
+    let old = VIRTUAL_IPI_STATUS[target_cpu].fetch_or(pending, Ordering::AcqRel);
+    let new = old | pending;
+    if old == 0 && new != 0 {
+        sync_or_notify_virtual_ipi_line(target_cpu);
+    }
+
+    if blocking {
+        // The emulated send is synchronous: the target status and event queue
+        // are globally visible before the trapped IOCSR write completes.
+        fence(Ordering::SeqCst);
     }
 
     Ok(())
@@ -695,7 +734,8 @@ fn handle_ipi_any_send_mmio(mmio: &mut MMIOAccess) -> HvResult {
     let value = mmio.value as u32;
     let ipi_id = value & 0x1f;
     let target_guest_cpu = ((value >> 16) & 0x3ff) as usize;
-    virtual_ipi_send(target_guest_cpu, 1u32 << ipi_id)
+    let blocking = value & IOCSR_IPI_SEND_BLOCKING != 0;
+    virtual_ipi_send(target_guest_cpu, 1u32 << ipi_id, blocking)
 }
 
 fn handle_ipi_mail_send_mmio(mmio: &mut MMIOAccess) -> HvResult {
@@ -790,17 +830,18 @@ fn handle_ipi_mmio(mmio: &mut MMIOAccess) -> HvResult {
         }
         IPI_SET => {
             if mmio.is_write {
-                virtual_ipi_send(guest_cpu, mmio.value as u32)?;
+                virtual_ipi_send(guest_cpu, mmio.value as u32, false)?;
             } else {
                 mmio.value = 0;
             }
         }
         IPI_CLEAR => {
             if mmio.is_write {
-                let old = VIRTUAL_IPI_STATUS[cpu].load(Ordering::Acquire);
-                VIRTUAL_IPI_STATUS[cpu].fetch_and(!(mmio.value as u32), Ordering::AcqRel);
-                if cpu == this_cpu_id() && (old & mmio.value as u32) != 0 {
-                    crate::device::irqchip::ls7a2000::clear_injected_irq(12);
+                let mask = mmio.value as u32;
+                let old = VIRTUAL_IPI_STATUS[cpu].fetch_and(!mask, Ordering::AcqRel);
+                let new = old & !mask;
+                if old != 0 && new == 0 {
+                    sync_or_notify_virtual_ipi_line(cpu);
                 }
                 if old != 0 || mmio.value != 0 {
                     debug!(
@@ -953,7 +994,10 @@ impl Zone {
         Ok(())
     }
 
-    pub fn arch_zone_reset(&mut self, _config: &HvZoneConfig) -> HvResult {
+    pub fn arch_zone_reset(&mut self, config: &HvZoneConfig) -> HvResult {
+        for cpu in config.cpus().iter() {
+            reset_virtual_ipi_state(*cpu as usize);
+        }
         Ok(())
     }
 }
