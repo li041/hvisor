@@ -72,7 +72,27 @@ impl ArchCpu {
         {
             self.hstatus |= 1 << 12; // HSTATUS_VGEIN
         }
-        self.sstatus = 1 << 8 | 1 << 63 | 3 << 13 | 3 << 15; //SPP
+        #[cfg(all(aia, rva23))]
+        {
+            // Permit the AIA guest state advertised by qemu-aia. Without these
+            // enables, accesses from VS-mode to the corresponding state raise a
+            // virtual-instruction exception.
+            set_csr!(
+                CSR_HSTATEEN0,
+                HSTATEEN0_IMSIC
+                    | HSTATEEN0_AIA
+                    | HSTATEEN0_CSRIND
+                    | HSTATEEN0_SENVCFG
+                    | HSTATEEN0_SSTATEEN
+            );
+        }
+        self.sstatus = SSTATUS_SPP | SSTATUS_FS_DIRTY;
+        #[cfg(rva23)]
+        {
+            // With V=1, vector instructions require both the HS-level
+            // sstatus.VS and the guest's vsstatus.VS to be enabled.
+            self.sstatus |= SSTATUS_VS_DIRTY;
+        }
         self.stack_top = self.stack_top() as usize;
         for i in 0..32 {
             self.x[i] = 0;
@@ -83,7 +103,13 @@ impl ArchCpu {
         if self.sstc {
             // hvisor doesn't handle timer interrupt.
             set_csr!(CSR_STIMECMP, usize::MAX);
-            set_csr!(CSR_HENVCFG, 1 << 63);
+            #[cfg(rva23)]
+            set_csr!(
+                CSR_HENVCFG,
+                HENVCFG_STCE | HENVCFG_PBMTE | HENVCFG_CBIE | HENVCFG_CBCFE | HENVCFG_CBZE
+            );
+            #[cfg(not(rva23))]
+            set_csr!(CSR_HENVCFG, HENVCFG_STCE);
             set_csr!(CSR_VSTIMECMP, usize::MAX);
         } else {
             // In megrez board, this instruction is not supported. (illegal instruction)
@@ -94,6 +120,14 @@ impl ArchCpu {
                                           // In VU-mode, a counter is not readable unless the applicable bits are set in both hcounteren and scounteren.
         write_csr!(CSR_HTIMEDELTA, 0);
         write_csr!(CSR_HIE, 0);
+        // Initialize the guest's virtual supervisor floating-point state on
+        // every platform. SD and XS are read-only summary fields.
+        write_csr!(CSR_VSSTATUS, SSTATUS_FS_DIRTY);
+        #[cfg(rva23)]
+        {
+            // RVA23 additionally exposes Vector to the guest.
+            set_csr!(CSR_VSSTATUS, SSTATUS_VS_DIRTY);
+        }
         write_csr!(CSR_VSTVEC, 0);
         write_csr!(CSR_VSSCRATCH, 0);
         write_csr!(CSR_VSEPC, 0);
