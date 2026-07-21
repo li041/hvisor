@@ -351,8 +351,7 @@ pub fn arch_check_events(event: Option<usize>) {
             clear_hwi_injected_irq();
         }
         Some(IPI_EVENT_SEND_IPI) => {
-            use crate::device::irqchip::ls7a2000::inject_irq;
-            inject_irq(12, false);
+            crate::arch::zone::sync_virtual_ipi_line();
         }
         _ => {
             panic!("arch_check_events: unhandled event: {:?}", event);
