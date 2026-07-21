@@ -73,6 +73,25 @@ register_structs! {
 const MMIO_BASE: usize = 0x8000_0000_1fe0_0000;
 const IPI_MMIO_BASE: usize = MMIO_BASE;
 const IPI_ANY_SEND_BASE: usize = MMIO_BASE + 0x1158;
+const IOCSR_IPI_STATUS: usize = 0x1000;
+const IOCSR_IPI_ENABLE: usize = 0x1004;
+const IOCSR_IPI_CLEAR: usize = 0x100c;
+
+#[inline]
+fn iocsr_read32(reg: usize) -> u32 {
+    let value: usize;
+    unsafe {
+        asm!("iocsrrd.w {}, {}", out(reg) value, in(reg) reg);
+    }
+    value as u32
+}
+
+#[inline]
+fn iocsr_write32(value: u32, reg: usize) {
+    unsafe {
+        asm!("iocsrwr.w {}, {}", in(reg) value as usize, in(reg) reg);
+    }
+}
 
 // IPI registers, use this if you don't want to use the percore-IPI feature
 pub static CORE0_IPI: MMIODerefWrapper<IpiRegisters> =
@@ -89,7 +108,9 @@ pub const SMP_BOOT_CPU: usize = 0x1;
 pub const SMP_RESCHEDULE: usize = 0x2;
 pub const SMP_CALL_FUNCTION: usize = 0x4;
 // customized actions :), since there is no docs on this yet
-pub const HVISOR_START_VCPU: usize = 0x8;
+/// Dedicated physical IPI bit used only as the hvisor event-queue doorbell.
+/// Linux SMP actions use bits 0..=2, so sharing those bits can drop guest IPI work.
+pub const HVISOR_EVENT_DOORBELL: usize = 0x8;
 
 fn iocsr_mbuf_send_box_lo(a: usize) -> usize {
     a << 1
@@ -240,37 +261,24 @@ pub fn mail_send(data: usize, cpu_id: usize, mailbox_id: usize) {
 }
 
 pub fn enable_ipi(cpu_id: usize) {
-    let ipi: &MMIODerefWrapper<IpiRegisters> = match cpu_id {
-        0 => &CORE0_IPI,
-        1 => &CORE1_IPI,
-        2 => &CORE2_IPI,
-        3 => &CORE3_IPI,
-        _ => {
-            error!("enable_ipi: invalid cpu_id: {}", cpu_id);
-            return;
-        }
-    };
-    ipi.ipi_enable.write(IpiEnable::IPIENABLE.val(0xffffffff));
+    assert_eq!(cpu_id, this_cpu_id());
+    iocsr_write32(u32::MAX, IOCSR_IPI_ENABLE);
     debug!("enable_ipi: IPI enabled for cpu {}", cpu_id);
 }
 
 pub fn clear_all_ipi(cpu_id: usize) {
-    let ipi: &MMIODerefWrapper<IpiRegisters> = match cpu_id {
-        0 => &CORE0_IPI,
-        1 => &CORE1_IPI,
-        2 => &CORE2_IPI,
-        3 => &CORE3_IPI,
-        _ => {
-            error!("clear_all_ipi: invalid cpu_id: {}", cpu_id);
-            return;
-        }
-    };
-    ipi.ipi_clear.write(IpiClear::IPICLEAR.val(0xffffffff));
+    assert_eq!(cpu_id, this_cpu_id());
+    iocsr_write32(u32::MAX, IOCSR_IPI_CLEAR);
     debug!(
         "clear_all_ipi: IPI status for cpu {}: {:#x}",
         cpu_id,
-        ipi.ipi_status.read(IpiStatus::IPISTATUS)
+        iocsr_read32(IOCSR_IPI_STATUS)
     );
+}
+
+pub fn clear_ipi_bits(cpu_id: usize, mask: u32) {
+    assert_eq!(cpu_id, this_cpu_id());
+    iocsr_write32(mask, IOCSR_IPI_CLEAR);
 }
 
 pub fn reset_ipi(cpu_id: usize) {
@@ -280,17 +288,8 @@ pub fn reset_ipi(cpu_id: usize) {
 }
 
 pub fn get_ipi_status(cpu_id: usize) -> u32 {
-    let ipi: &MMIODerefWrapper<IpiRegisters> = match cpu_id {
-        0 => &CORE0_IPI,
-        1 => &CORE1_IPI,
-        2 => &CORE2_IPI,
-        3 => &CORE3_IPI,
-        _ => {
-            error!("get_ipi_status: invalid cpu_id: {}", cpu_id);
-            return 0;
-        }
-    };
-    ipi.ipi_status.read(IpiStatus::IPISTATUS)
+    assert_eq!(cpu_id, this_cpu_id());
+    iocsr_read32(IOCSR_IPI_STATUS)
 }
 
 pub fn ecfg_ipi_enable() {
@@ -362,8 +361,6 @@ pub fn arch_check_events(event: Option<usize>) {
 }
 
 pub fn arch_prepare_send_event(cpu_id: usize, ipi_int_id: usize, event_id: usize) {
-    use crate::event::fetch_event;
-    while !fetch_event(cpu_id).is_none() {}
     debug!(
         "loongarch64:: send_event: cpu_id: {}, ipi_int_id: {}, event_id: {}",
         cpu_id, ipi_int_id, event_id
