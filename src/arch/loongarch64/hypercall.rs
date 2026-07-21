@@ -17,7 +17,6 @@
 use crate::arch::cpu::this_cpu_id;
 use crate::config::HvZoneConfig;
 use crate::config::CONFIG_MAGIC_VERSION;
-use crate::device::virtio_trampoline::MAX_DEVS;
 use crate::hypercall::HyperCall;
 use crate::hypercall::HyperCallResult;
 impl<'a> HyperCall<'a> {
@@ -28,13 +27,6 @@ impl<'a> HyperCall<'a> {
     pub fn hv_ivc_info(&mut self, ivc_info_ipa: u64) -> HyperCallResult {
         warn!("hv_ivc_info is not implemented for LoongArch64");
         HyperCallResult::Ok(0)
-    }
-
-    pub fn wait_for_interrupt(&mut self, irq_list: &mut [u64; MAX_DEVS + 1]) {
-        use crate::device::irqchip::ls7a2000::*;
-        let status = GLOBAL_IRQ_INJECT_STATUS.lock();
-        drop(status);
-        irq_list[0] = 0; // CAUTION: this is a workaround for loongarch64
     }
 
     pub fn hv_zone_config_check(&self, magic_version: *mut u64) -> HyperCallResult {

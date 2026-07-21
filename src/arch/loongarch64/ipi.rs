@@ -215,9 +215,7 @@ pub fn ecfg_ipi_disable() {
 pub fn arch_check_events(event: Option<usize>) {
     match event {
         Some(IPI_EVENT_CLEAR_INJECT_IRQ) => {
-            // clear the injected IPI interrupt
-            use crate::device::irqchip::ls7a2000::clear_hwi_injected_irq;
-            clear_hwi_injected_irq();
+            warn!("legacy CLEAR_INJECT_IRQ event ignored; use the per-IRQ line API");
         }
         Some(IPI_EVENT_SEND_IPI) => {
             crate::arch::zone::sync_virtual_ipi_line();

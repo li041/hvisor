@@ -1305,7 +1305,6 @@ fn handle_interrupt(is: usize) {
     if is & TIMER_BIT != 0 {
         debug!("Timer interrupt received");
         loongArch64::register::ticlr::clear_timer_interrupt();
-        crate::device::irqchip::ls7a2000::clear_hwi_injected_irq_if_needed();
         return;
     }
 
