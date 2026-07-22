@@ -1019,7 +1019,7 @@ impl Zone {
     }
 
     pub fn arch_zone_pre_configuration(&mut self, config: &HvZoneConfig) -> HvResult {
-        Ok(())
+        self.ivc_init(config.ivc_config())
     }
 
     pub fn arch_zone_post_configuration(&mut self, config: &HvZoneConfig) -> HvResult {

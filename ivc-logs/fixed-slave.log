@@ -1,0 +1,4 @@
+__IVC_SLAVE_BEGIN__
+6.13.7
+ivc_insmod_rc=0
+crw-------    1 root     root      243,   0 Jan  1 00:00 /dev/hivc0

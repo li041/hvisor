@@ -190,11 +190,14 @@ impl<'a> HyperCall<'a> {
     }
 
     fn hv_virtio_deassert_irq(&mut self, target_zone: usize, irq_id: usize) -> HyperCallResult {
-        if !is_this_root_zone() {
-            return hv_result_err!(
-                EPERM,
-                "Virtio deassert operation over non-root zones: unsupported!"
-            );
+        let caller_zone = crate::zone::this_zone_id();
+        let target_zone = if target_zone == usize::MAX {
+            caller_zone
+        } else {
+            target_zone
+        };
+        if !is_this_root_zone() && target_zone != caller_zone {
+            return hv_result_err!(EPERM, "A non-root zone may only deassert its own interrupt");
         }
         if find_zone(target_zone).is_none() {
             return hv_result_err!(EINVAL, format!("zone {} does not exist", target_zone));
@@ -332,6 +335,9 @@ impl<'a> HyperCall<'a> {
         #[cfg(viommu)]
         crate::device::iommu::viommu_remove(zone_id as usize);
         drop(zone);
+
+        #[cfg(target_arch = "loongarch64")]
+        crate::arch::ivc::cleanup_zone_ivc(zone_id as usize);
 
         // Reset zone_id for all devices allocated to this zone
         let pci_list = GLOBAL_PCIE_LIST.lock();

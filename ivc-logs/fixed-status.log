@@ -1,0 +1,10 @@
+efi_sha256=db0de14517cc3f17f2dd113eca6904fef93a2e0038b38baec8a110ba0f95ca0c
+samples_per_run=100
+root_ivc_rc=0
+daemon_rc=0
+start_rc=0
+fixed_run_01=0
+fixed_run_02=0
+fixed_run_03=0
+fixed_run_04=0
+fixed_run_05=0

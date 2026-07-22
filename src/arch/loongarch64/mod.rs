@@ -22,6 +22,7 @@ pub mod cpu;
 pub mod entry;
 pub mod hypercall;
 pub mod ipi;
+pub mod ivc;
 pub mod mm;
 pub mod paging;
 pub mod register;

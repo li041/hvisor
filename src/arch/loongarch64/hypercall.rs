@@ -15,13 +15,26 @@
 //  ForeverYolo <2572131118@qq.com>
 
 use crate::arch::cpu::this_cpu_id;
+use crate::arch::ivc::{IvcInfo, IVC_INFOS};
+use crate::arch::mm::LOONGARCH64_CACHED_DMW_PREFIX;
 use crate::config::HvZoneConfig;
 use crate::config::CONFIG_MAGIC_VERSION;
+use crate::cpu_data::this_zone;
 use crate::hypercall::HyperCall;
 use crate::hypercall::HyperCallResult;
+use crate::zone::this_zone_id;
 impl<'a> HyperCall<'a> {
     pub fn hv_ivc_info(&mut self, ivc_info_ipa: u64) -> HyperCallResult {
-        warn!("hv_ivc_info is not implemented for LoongArch64");
+        let zone_id = this_zone_id();
+        let zone = this_zone();
+        let hpa = match unsafe { zone.read().gpm().page_table_query(ivc_info_ipa as usize) } {
+            Ok((hpa, _, _)) => hpa,
+            Err(_) => return hv_result_err!(EFAULT, "IVC info buffer is not mapped"),
+        };
+        let dst = (hpa as u64 | LOONGARCH64_CACHED_DMW_PREFIX) as *mut IvcInfo;
+        let infos = IVC_INFOS.lock();
+        let info = infos.get(&zone_id).ok_or(hv_err!(ENODEV))?;
+        unsafe { core::ptr::write(dst, *info) };
         HyperCallResult::Ok(0)
     }
 

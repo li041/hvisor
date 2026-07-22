@@ -210,7 +210,16 @@ pub const ROOT_ZONE_MEMORY_REGIONS: &[HvConfigMemoryRegion] = &[
 pub const IRQ_WAKEUP_VIRTIO_DEVICE: usize = 32 + 0x20;
 pub const ROOT_ZONE_IRQS_BITMAP: &[BitmapWord] = &get_irqs_bitmap(&[]);
 pub const ROOT_ARCH_ZONE_CONFIG: HvArchZoneConfig = HvArchZoneConfig { dummy: 0 };
-pub const ROOT_ZONE_IVC_CONFIG: [HvIvcConfig; 0] = [];
+pub const ROOT_ZONE_IVC_CONFIG: [HvIvcConfig; 1] = [HvIvcConfig {
+    ivc_id: 0,
+    peer_id: 0,
+    control_table_ipa: 0x2_00be_0000,
+    shared_mem_ipa: 0x2_00be_1000,
+    rw_sec_size: 0,
+    out_sec_size: 0x1000,
+    interrupt_num: 6,
+    max_peers: 2,
+}];
 
 pub const ROOT_PCI_CONFIG: [HvPciConfig; 1] = [HvPciConfig {
     bus_range_begin: 0x0,

@@ -1,0 +1,9 @@
+test_start=2026-07-22T15:50:00+08:00
+root_ivc_rc=0
+daemon_rc=0
+start_rc=0
+run_01=0
+run_02=0
+run_03=0
+run_04=1
+run_05=1
