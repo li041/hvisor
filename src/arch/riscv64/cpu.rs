@@ -37,6 +37,11 @@ pub struct ArchCpu {
     pub stack_top: usize,
     pub cpuid: usize,
     // pub first_cpu: usize,
+    /// Whether Sstc is exposed to this VS-mode guest.
+    ///
+    /// This is distinct from `cfg(isa_sstc)`, which describes host-platform
+    /// support. They currently have the same value, but may differ when Sstc
+    /// exposure becomes configurable per guest.
     pub sstc: bool,
 }
 
@@ -52,7 +57,8 @@ impl ArchCpu {
             stack_top: 0,
             cpuid,
             // first_cpu: 0,
-            sstc: cfg!(sstc),
+            // Initially expose Sstc whenever the host platform supports it.
+            sstc: cfg!(isa_sstc),
         };
         ret
     }
@@ -87,7 +93,7 @@ impl ArchCpu {
             );
         }
         self.sstatus = SSTATUS_SPP | SSTATUS_FS_DIRTY;
-        #[cfg(rva23)]
+        #[cfg(isa_vector)]
         {
             // With V=1, vector instructions require both the HS-level
             // sstatus.VS and the guest's vsstatus.VS to be enabled.
@@ -100,21 +106,45 @@ impl ArchCpu {
         self.x[10] = cpu_id; // cpu id
         self.x[11] = dtb; // dtb addr
 
-        if self.sstc {
-            // hvisor doesn't handle timer interrupt.
+        // Hypervisor v0.6 does not define henvcfg, so never access this CSR
+        // when building for that version.
+        #[cfg(not(hypervisor_v0_6))]
+        {
+            #[cfg(any(isa_sstc, isa_svpbmt, isa_cmo))]
+            let mut henvcfg = 0;
+            #[cfg(not(any(isa_sstc, isa_svpbmt, isa_cmo)))]
+            let henvcfg = 0;
+            #[cfg(isa_sstc)]
+            {
+                // STCE controls whether this guest may access vstimecmp.
+                if self.sstc {
+                    henvcfg |= HENVCFG_STCE;
+                } else {
+                    // Sstc is not exposed to this guest; keep STCE clear.
+                }
+            }
+            #[cfg(isa_svpbmt)]
+            {
+                henvcfg |= HENVCFG_PBMTE;
+            }
+            #[cfg(isa_cmo)]
+            {
+                // Zicbom uses CBIE for CBO.INVAL and CBCFE for
+                // CBO.CLEAN/CBO.FLUSH. Zicboz uses CBZE for CBO.ZERO.
+                // Zicbop prefetch hints require no HENVCFG enable bit.
+                henvcfg |= HENVCFG_CBIE | HENVCFG_CBCFE | HENVCFG_CBZE;
+            }
+            // Write the complete value once so a vCPU reset cannot retain stale bits.
+            write_csr!(CSR_HENVCFG, henvcfg);
+        }
+
+        #[cfg(isa_sstc)]
+        {
+            // The host-platform Sstc timer is not used by hvisor.
             set_csr!(CSR_STIMECMP, usize::MAX);
-            #[cfg(rva23)]
-            set_csr!(
-                CSR_HENVCFG,
-                HENVCFG_STCE | HENVCFG_PBMTE | HENVCFG_CBIE | HENVCFG_CBCFE | HENVCFG_CBZE
-            );
-            #[cfg(not(rva23))]
-            set_csr!(CSR_HENVCFG, HENVCFG_STCE);
+            // HS-mode can program vstimecmp whenever the platform supports
+            // Sstc, regardless of whether direct access is exposed to VS-mode.
             set_csr!(CSR_VSTIMECMP, usize::MAX);
-        } else {
-            // In megrez board, this instruction is not supported. (illegal instruction)
-            #[cfg(not(hypervisor_v0_6))]
-            set_csr!(CSR_HENVCFG, 0);
         }
         set_csr!(CSR_HCOUNTEREN, 1 << 1); // HCOUNTEREN_TM
                                           // In VU-mode, a counter is not readable unless the applicable bits are set in both hcounteren and scounteren.
@@ -123,9 +153,9 @@ impl ArchCpu {
         // Initialize the guest's virtual supervisor floating-point state on
         // every platform. SD and XS are read-only summary fields.
         write_csr!(CSR_VSSTATUS, SSTATUS_FS_DIRTY);
-        #[cfg(rva23)]
+        #[cfg(isa_vector)]
         {
-            // RVA23 additionally exposes Vector to the guest.
+            // Expose Vector state to the guest when the V extension is enabled.
             set_csr!(CSR_VSSTATUS, SSTATUS_VS_DIRTY);
         }
         write_csr!(CSR_VSTVEC, 0);
