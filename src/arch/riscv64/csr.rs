@@ -71,9 +71,10 @@ pub const SSTATUS_VS_DIRTY: usize = 0b11 << SSTATUS_VS_SHIFT;
 pub const HENVCFG_STCE: usize = 1 << 63;
 // HENVCFG.PBMTE: enable page-based memory types from Svpbmt in VS-mode.
 pub const HENVCFG_PBMTE: usize = 1 << 62;
-// HENVCFG controls for the cache-block extensions advertised to VS-mode.
-// CBIE[5:4]=01 enables CBO.INVAL, CBCFE enables CBO.FLUSH, and CBZE enables
-// CBO.ZERO. These correspond to zicbom/zicbop/zicboz in the guest ISA.
+// HENVCFG controls for cache-block operations advertised to VS-mode.
+// Zicbom uses CBIE[5:4]=01 for CBO.INVAL (performed as a flush) and CBCFE for
+// CBO.CLEAN/CBO.FLUSH. Zicboz uses CBZE for CBO.ZERO. Zicbop prefetch hints
+// do not require an HENVCFG enable bit.
 pub const HENVCFG_CBIE: usize = 1 << 4;
 pub const HENVCFG_CBCFE: usize = 1 << 6;
 pub const HENVCFG_CBZE: usize = 1 << 7;

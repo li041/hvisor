@@ -70,13 +70,44 @@ menu "RISC-V options"
 config RVA23
 	bool "RVA23 profile"
 	default n
-	# TODO: RVA23 will likely become the common RISC-V server profile. If
-	# needed, split its individual extensions into separate feature options
-	# later for platforms that do not strictly implement the RVA23 profile.
+	select ISA_VECTOR
+	select ISA_SSTC
+	select ISA_SVPBMT
+	select ISA_CMO
+	help
+	  Enable the RVA23 profile. RVA23 mandates the RISC-V Vector, Sstc,
+	  Svpbmt, and base CMO extensions, so their ISA options are selected
+	  automatically.
 
-config SSTC
-	bool "Sstc"
+config ISA_VECTOR
+	bool "V (Vector)"
 	default n
+	help
+	  Enable guest Vector state. This sets the VS fields in sstatus and
+	  vsstatus so that guests can execute RISC-V Vector instructions.
+
+config ISA_SSTC
+	bool "Sstc (Supervisor-mode timer interrupts)"
+	default n
+	help
+	  Indicate that the host platform implements the RISC-V Sstc extension,
+	  allowing hvisor to program stimecmp and vstimecmp. Direct VS-mode
+	  access to vstimecmp is controlled separately for each guest.
+
+config ISA_SVPBMT
+	bool "Svpbmt (Page-Based Memory Types)"
+	default n
+	help
+	  Enable the RISC-V Svpbmt extension. This sets HENVCFG.PBMTE so that
+	  guests can use page-based memory types in their page-table entries.
+
+config ISA_CMO
+	bool "CMO (Base Cache Management Operations)"
+	default n
+	help
+	  Enable the RISC-V base Cache Management Operation ISA extensions:
+	  Zicbom for cache-block management, Zicbop for cache-block prefetch,
+	  and Zicboz for cache-block zero.
 
 config HYPERVISOR_V0_6
 	bool "Hypervisor v0.6"
