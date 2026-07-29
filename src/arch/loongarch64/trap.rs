@@ -19,11 +19,11 @@ use super::register::*;
 use super::zone::ZoneContext;
 use crate::arch::cpu::this_cpu_id;
 use crate::arch::ipi::*;
-use crate::consts::{IPI_EVENT_CLEAR_INJECT_IRQ, MAX_CPU_NUM};
+use crate::consts::MAX_CPU_NUM;
 use crate::cpu_data::this_cpu_data;
 use crate::device::irqchip::inject_irq;
 use crate::device::irqchip::ls7a2000::chip::*;
-use crate::event::{check_events, dump_cpu_events, dump_events};
+use crate::event::{dump_events, handle_next_event};
 use crate::hypercall::{SGI_IPI_ID, *};
 use crate::memory::{addr, mmio_handle_access, MMIOAccess};
 use crate::zone::Zone;
@@ -1274,26 +1274,30 @@ fn handle_interrupt(is: usize) {
     // Handle IPI interrupts
     if is & IPI_BIT != 0 {
         let cpu_id = this_cpu_id();
-        let ipi_status = get_ipi_status(cpu_id);
+        let ipi_status = get_ipi_status();
         debug!(
             "CPU {} received IPI interrupt, status = {:#x}",
             cpu_id, ipi_status
         );
 
-        match ipi_status {
-            status if status == SGI_IPI_ID as _ => {
-                let events = dump_cpu_events(cpu_id);
-                debug!("CPU {} events: {:?}", cpu_id, events);
-                while check_events() {}
-            }
-            status if status == 0x8 => {
-                debug!("CPU {} received unhandled IPI status {:#x}", cpu_id, status);
-            }
-            status => {
-                warn!("CPU {} received unknown IPI status {:#x}", cpu_id, status);
+        let hvisor_mask = SGI_IPI_ID as u32;
+        if ipi_status & hvisor_mask != 0 {
+            // Clear before each fetch. If the fetch observes an empty queue while a
+            // producer enqueues concurrently, its doorbell remains pending and
+            // re-fires. Clearing after the fetch could lose that coalesced wakeup.
+            clear_ipi_bits(hvisor_mask);
+            while handle_next_event() {
+                clear_ipi_bits(hvisor_mask);
             }
         }
-        reset_ipi(cpu_id);
+
+        let unhandled = ipi_status & !hvisor_mask;
+        if unhandled != 0 {
+            error!(
+                "CPU {} has unhandled physical IPI status {:#x}; preserving those bits",
+                cpu_id, unhandled
+            );
+        }
         return;
     }
 

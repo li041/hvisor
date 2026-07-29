@@ -56,6 +56,9 @@ numeric_enum! {
         HvGetEcamBase = 9,
     }
 }
+#[cfg(target_arch = "loongarch64")]
+pub const SGI_IPI_ID: u64 = crate::arch::ipi::HVISOR_EVENT_DOORBELL as u64;
+#[cfg(not(target_arch = "loongarch64"))]
 pub const SGI_IPI_ID: u64 = 7;
 
 pub type HyperCallResult = HvResult<usize>;
