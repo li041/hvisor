@@ -85,8 +85,8 @@ pub fn clock_cpucfg_dump() {
 pub fn percpu_init() {
     info!("loongarch64: irqchip: percpu_init: running percpu_init");
 
-    clear_all_ipi(this_cpu_id());
-    enable_ipi(this_cpu_id());
+    clear_all_ipi();
+    enable_ipi();
     ecfg_ipi_enable();
     clock_cpucfg_dump();
     // timer_test_tick();
@@ -153,6 +153,27 @@ pub fn clear_hwi_injected_irq() {
     status.cpu_status[this_cpu_id()].status = InjectionStatus::Idle;
 
     tcfg::set_en(false); // stop timer
+}
+
+pub fn clear_injected_irq(_irq: usize) {
+    debug!("loongarch64: clear_injected_irq: _irq: {}", _irq);
+    if _irq > INT_IPI {
+        error!("loongarch64: clear_injected_irq: _irq > {}, not valid", INT_IPI);
+        return;
+    }
+    let bit = 1 << _irq;
+    if _irq >= INT_HWI0 && _irq <= INT_HWI7 {
+        use crate::arch::register::gintc;
+        gintc::set_hwis(gintc::read().hwis() & !(bit >> INT_HWI0));
+    } else {
+        let mut gcsr_estat = read_gcsr_estat();
+        gcsr_estat &= !bit;
+        write_gcsr_estat(gcsr_estat);
+    }
+
+    let mut status = GLOBAL_IRQ_INJECT_STATUS.lock();
+    status.cpu_status[this_cpu_id()].status = InjectionStatus::Idle;
+    tcfg::set_en(false);
 }
 
 pub fn clear_hwi_injected_irq_if_needed() {

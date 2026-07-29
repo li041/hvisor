@@ -16,7 +16,7 @@
 #![allow(unused)]
 use crate::{
     arch::cpu::this_cpu_id,
-    arch::ipi::{arch_check_events, arch_prepare_send_event, arch_send_event},
+    arch::ipi::{arch_check_events, arch_notify_event},
     consts::{
         IPI_EVENT_CLEAR_INJECT_IRQ, IPI_EVENT_DWC_MSI_INJECT, IPI_EVENT_SEND_IPI,
         IPI_EVENT_UPDATE_HART_LINE, IPI_EVENT_VCPU_SUSPEND, MAX_CPU_NUM,
@@ -50,17 +50,20 @@ fn get_percpu_events(cpu: usize) -> &'static Mutex<VecDeque<usize>> {
     unsafe { PERCPU_EVENTS.remote_ref_raw(cpu) }
 }
 
-fn add_event(cpu: usize, event_id: usize) -> Option<()> {
+/// Enqueue an event and report whether the target queue was previously empty.
+/// Architectures can use the transition to coalesce their notification mechanism.
+fn add_event(cpu: usize, event_id: usize) -> Option<bool> {
     if cpu >= MAX_CPU_NUM {
         return None;
     }
     let mut e = get_percpu_events(cpu).lock();
+    let was_empty = e.is_empty();
     if event_id == IPI_EVENT_SHUTDOWN {
         // If the event is shutdown, we need to clear all previous events, because shutdown will make cpu idle and won't process any events.
         e.clear();
     }
     e.push_back(event_id);
-    Some(())
+    Some(was_empty)
 }
 
 pub fn fetch_event(cpu: usize) -> Option<usize> {
@@ -93,9 +96,8 @@ pub fn clear_events(cpu: usize) {
     get_percpu_events(cpu).lock().clear();
 }
 
-pub fn check_events() -> bool {
+fn handle_event(event: Option<usize>) -> bool {
     let cpu_data = this_cpu_data();
-    let event = fetch_event(cpu_data.id);
     match event {
         Some(IPI_EVENT_WAKEUP) => {
             cpu_data.arch_cpu.run();
@@ -149,47 +151,28 @@ pub fn check_events() -> bool {
             vcpu_suspend();
             true
         }
-        // #[cfg(target_arch = "loongarch64")]
-        // Some(IPI_EVENT_CLEAR_INJECT_IRQ) => {
-        //     use crate::device::irqchip;
-        //     irqchip::ls7a2000::clear_hwi_injected_irq();
-        //     true
-        // }
-        // #[cfg(all(target_arch = "riscv64", plic))]
-        // Some(IPI_EVENT_UPDATE_HART_LINE) => {
-        //     use crate::device::irqchip;
-        //     info!("cpu {} update hart line", cpu_data.id);
-        //     irqchip::plic::update_hart_line();
-        //     true
-        // }
-        // #[cfg(target_arch = "riscv64")]
-        // Some(IPI_EVENT_SEND_IPI) => {
-        //     // This event is different from events above, it is used to inject software interrupt.
-        //     // While events above will inject external interrupt.
-        //     use crate::arch::ipi::arch_ipi_handler;
-        //     arch_ipi_handler();
-        //     true
-        // }
         _ => false,
     }
 }
 
+pub fn check_events() -> bool {
+    handle_event(fetch_event(this_cpu_data().id))
+}
+
+/// Handle one queued event, returning whether an event was present.
+pub fn handle_next_event() -> bool {
+    let event = fetch_event(this_cpu_data().id);
+    if event.is_none() {
+        return false;
+    }
+    handle_event(event);
+    true
+}
+
 pub fn send_event(cpu_id: usize, ipi_int_id: usize, event_id: usize) {
-    // #[cfg(target_arch = "loongarch64")]
-    // {
-    //     // block until the previous event is processed, which means
-    //     // the target queue is empty
-    //     while !fetch_event(cpu_id).is_none() {}
-    //     debug!(
-    //         "loongarch64:: send_event: cpu_id: {}, ipi_int_id: {}, event_id: {}",
-    //         cpu_id, ipi_int_id, event_id
-    //     );
-    // }
-    /// Some arch need do something before send event.
-    /// Currently, we are not passing parameters, and we will modify the function signature later as needed.
-    arch_prepare_send_event(cpu_id, ipi_int_id, event_id);
-    add_event(cpu_id, event_id);
-    arch_send_event(cpu_id as _, ipi_int_id as _);
+    if let Some(queue_was_empty) = add_event(cpu_id, event_id) {
+        arch_notify_event(cpu_id as _, ipi_int_id as _, event_id, queue_was_empty);
+    }
 }
 
 /// Send event to a cpu set (except self).
