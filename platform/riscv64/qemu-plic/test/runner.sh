@@ -33,7 +33,7 @@ $OBJCOPY $HVISOR_ELF --strip-all -O binary $HVISOR_BIN
 
 qemu-system-riscv64 \
     -machine virt,aclint=on \
-    -bios default -cpu rv64 -smp 4 -m 4G -nographic \
+    -bios default -cpu rva23s64 -smp 4 -m 4G -nographic \
     -kernel $HVISOR_BIN
 
 exit 0
