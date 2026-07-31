@@ -71,15 +71,22 @@ impl ArchCpu {
         for i in 0..32 {
             self.ctx.x[i] = 0;
         }
-        // set all zone's GCSR.CPUID to 0 beacuse linux running on it will believe it's CPU0
-        // - wheatfox 2025.5.20
-        self.ctx.gcsr_cpuid = 0;
+        let zone_cpu_num = this_cpu_data()
+            .zone
+            .as_ref()
+            .map(|zone| zone.read().cpu_num())
+            .unwrap_or(1);
+        self.ctx.gcsr_cpuid = if zone_cpu_num == 1 {
+            0
+        } else {
+            this_cpu_data().id
+        };
         info!(
             "[[CPU virtualization]] CPU{} run@{:#x}",
             self.get_cpuid(),
             self.ctx.sepc
         );
-        info!("loongarch64: @{:#x?}", self);
+        debug!("loongarch64: @{:#x?}", self);
         // step 1: enable guest mode
         // step 2: set guest entry to era
         // step 3: run ertn and enter guest mode
