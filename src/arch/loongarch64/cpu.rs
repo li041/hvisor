@@ -114,8 +114,6 @@ impl ArchCpu {
         }
 
         super::trap::_vcpu_return(ctx_addr as usize);
-
-        panic!("loongarch64: ArchCpu::run: unreachable");
     }
     pub fn idle(&mut self) -> ! {
         let ctx_addr = &mut self.ctx as *mut ZoneContext;
@@ -133,6 +131,9 @@ impl ArchCpu {
         this_cpu_data().vcpu_state.store(VcpuState::Stopped);
         // enable ipi on ecfg
         ecfg_ipi_enable();
+        // The trap vector is installed with interrupts disabled. Enable them only
+        // after this CPU has valid trap context and stack pointers in SAVE3/SAVE4.
+        super::trap::enable_global_interrupt();
         loop {}
     }
 }
