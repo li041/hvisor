@@ -108,6 +108,14 @@ pub struct HvZoneConfig {
     pub alloc_pci_devs: [HvPciDevConfig; CONFIG_MAX_PCI_DEV],
 }
 
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct HvZoneBootMode {
+    pub zone_id: u32,
+    pub multiboot_enabled: u32,
+    pub multiboot_info_paddr: u64,
+}
+
 impl HvZoneConfig {
     pub fn new(
         zone_id: u32,

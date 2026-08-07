@@ -53,7 +53,7 @@ const ROOT_ZONE_UEFI_REGION: HvConfigMemoryRegion = HvConfigMemoryRegion {
 const ROOT_ZONE_UEFI_REGION_ID: usize = 0x3;
 
 pub const ROOT_ZONE_NAME: &str = "root-linux";
-pub const ROOT_ZONE_CMDLINE: &str = 
+pub const ROOT_ZONE_CMDLINE: &str =
 // "BOOT_IMAGE=/boot/aster-kernel-osdk-bin SHELL=/bin/sh LOGNAME=root HOME=/ USER=root PATH=/bin:/benchmark ostd.log_level=info console=ttyS0 console=tty0 -- sh -l";
 // TODO: Asterinas
 "console=ttyS0 earlyprintk=serial nointremap no_timer_check efi=noruntime pci=pcie_scan_all,lastbus=1 root=/dev/vda rw init=/init\0";
@@ -127,8 +127,8 @@ pub const ROOT_ARCH_ZONE_CONFIG: HvArchZoneConfig = HvArchZoneConfig {
     cmdline_load_gpa: ROOT_ZONE_CMDLINE_ADDR,
     setup_load_gpa: ROOT_ZONE_SETUP_ADDR,
     // TODO: Asterinas
-    initrd_load_gpa:0,// 0x1530_0000,
-    initrd_size:0,// 0x210_0000,     //0x26_b000,
+    initrd_load_gpa: 0, // 0x1530_0000,
+    initrd_size: 0,     // 0x210_0000,     //0x26_b000,
     rsdp_memory_region_id: ROOT_ZONE_RSDP_REGION_ID,
     acpi_memory_region_id: ROOT_ZONE_ACPI_REGION_ID,
     uefi_memory_region_id: ROOT_ZONE_UEFI_REGION_ID,
