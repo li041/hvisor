@@ -16,7 +16,7 @@
 
 use crate::{
     arch::{
-        acpi::{get_apic_id, get_cpu_id},
+        acpi::try_get_cpu_id,
         cpu::{this_apic_id, this_cpu_id},
         idt, ipi,
         mmio::MMIoDevice,
@@ -138,18 +138,23 @@ impl VirtIoApic {
                     if reg % 2 == 0 {
                         entry.set_bits(0..=31, value.get_bits(0..=31));
                     } else {
-                        let dest = value.get_bits(24..=31);
-                        if this_zone()
-                            .read()
-                            .cpu_set()
-                            .contains_cpu(get_cpu_id(dest as usize))
-                        {
-                            entry.set_bits(56..=63, dest);
+                        let original_dest = value.get_bits(24..=31);
+                        if let Some(dest_cpu) = try_get_cpu_id(original_dest as usize) {
+                            if this_zone().read().cpu_set().contains_cpu(dest_cpu) {
+                                entry.set_bits(56..=63, original_dest);
+                            } else {
+                                let dest = this_apic_id() as u64;
+                                info!(
+                                    "redirect irq {:x} to cpu {:x} in another zone! entry: {:x?}",
+                                    index, dest, *entry
+                                );
+                                entry.set_bits(56..=63, dest);
+                            }
                         } else {
                             let dest = this_apic_id() as u64;
                             info!(
-                                "redirect irq {:x} to cpu {:x} in another zone! entry: {:x?}",
-                                index, dest, *entry
+                                "redirect irq {:x} to cpu {:x} in another zone, unknown dest {:x}! entry: {:x?}",
+                                index, dest, original_dest, *entry
                             );
                             entry.set_bits(56..=63, dest);
                         }
@@ -173,7 +178,7 @@ impl VirtIoApic {
     fn get_irq_cpu(&self, irq: usize, zone_id: usize) -> Option<usize> {
         let ioapic = self.inner.get(zone_id).unwrap();
         if let Some(entry) = ioapic.lock().rte.get(irq) {
-            let dest = get_cpu_id(entry.get_bits(56..=63) as usize);
+            let dest = try_get_cpu_id(entry.get_bits(56..=63) as usize).unwrap_or_else(this_cpu_id);
             return Some(dest);
         }
         None
@@ -184,7 +189,7 @@ impl VirtIoApic {
         let ioapic = self.inner.get(zone_id).unwrap();
         if let Some(entry) = ioapic.lock().rte.get(irq) {
             // TODO: physical & logical mode
-            let dest = get_cpu_id(entry.get_bits(56..=63) as usize);
+            let dest = try_get_cpu_id(entry.get_bits(56..=63) as usize).unwrap_or_else(this_cpu_id);
             let masked = entry.get_bit(16);
             let vector = entry.get_bits(0..=7) as u8;
             if !masked && vector >= 0x20 {
