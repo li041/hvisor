@@ -103,12 +103,14 @@ pub fn arch_handle_trap(tf: &mut TrapFrame) {
 }
 
 fn handle_irq(vector: u8) {
+    let is_timer = vector == this_cpu_data().arch_cpu.virt_lapic.virt_timer_vector;
+
     match vector {
-        IdtVector::VIRT_IPI_VECTOR => {
+        IdtVector::VIRT_IPI_VECTOR if !is_timer => {
             ipi::handle_virt_ipi();
         }
-        IdtVector::I8042_KEYBOARD_VECTOR => {}
-        IdtVector::APIC_SPURIOUS_VECTOR | IdtVector::APIC_ERROR_VECTOR => {}
+        IdtVector::I8042_KEYBOARD_VECTOR if !is_timer => {}
+        IdtVector::APIC_SPURIOUS_VECTOR | IdtVector::APIC_ERROR_VECTOR if !is_timer => {}
         _ => {
             if vector >= 0x20 && this_cpu_data().vcpu_state.is_running() {
                 inject_vector(this_cpu_id(), vector, None, false);
