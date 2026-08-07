@@ -133,6 +133,7 @@ impl ArchCpu {
         PER_CPU_ARRAY_PTR as VirtAddr + (self.cpuid + 1) as usize * PER_CPU_SIZE
     }
 
+    #[allow(clippy::mut_from_ref)]
     fn guest_reg(&self) -> &mut GeneralRegisters {
         unsafe { &mut *((self.stack_top() - 32 * 8) as *mut GeneralRegisters) }
     }
