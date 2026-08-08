@@ -16,9 +16,9 @@
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 // use psci::error::INVALID_ADDRESS;
-use crate::consts::{INVALID_ADDRESS, MAX_CPU_NUM};
+use crate::consts::{INVALID_ADDRESS, MAX_CPU_NUM, MAX_ZONE_NUM};
 use crate::pci::pci_struct::VirtualRootComplex;
-use spin::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+use spin::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 #[cfg(dwc_pcie)]
 use crate::pci::{config_accessors::dwc_atu::AtuConfig, PciConfigAddress};
@@ -27,7 +27,7 @@ use alloc::collections::btree_map::BTreeMap;
 
 use crate::arch::mm::new_s2_memory_set;
 use crate::arch::s2pt::Stage2PageTable;
-use crate::config::{HvZoneConfig, CONFIG_NAME_MAXLEN};
+use crate::config::{HvZoneBootMode, HvZoneConfig, CONFIG_NAME_MAXLEN};
 
 use crate::cpu_data::{get_cpu_data, this_zone, CpuSet};
 use crate::error::HvResult;
@@ -765,6 +765,29 @@ impl ZoneInner {
 }
 
 static ZONE_LIST: RwLock<Vec<Arc<Zone>>> = RwLock::new(vec![]);
+static ZONE_BOOT_MODES: Mutex<[Option<HvZoneBootMode>; MAX_ZONE_NUM]> =
+    Mutex::new([None; MAX_ZONE_NUM]);
+
+pub fn set_zone_boot_mode(zone_id: usize, mode: HvZoneBootMode) {
+    if let Some(slot) = ZONE_BOOT_MODES.lock().get_mut(zone_id) {
+        *slot = Some(mode);
+    }
+}
+
+pub fn zone_boot_mode(zone_id: usize) -> HvZoneBootMode {
+    ZONE_BOOT_MODES
+        .lock()
+        .get(zone_id)
+        .copied()
+        .flatten()
+        .unwrap_or_default()
+}
+
+pub fn clear_zone_boot_mode(zone_id: usize) {
+    if let Some(slot) = ZONE_BOOT_MODES.lock().get_mut(zone_id) {
+        *slot = None;
+    }
+}
 
 pub fn root_zone() -> Arc<Zone> {
     ZONE_LIST.read().get(0).cloned().unwrap()
