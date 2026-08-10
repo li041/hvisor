@@ -53,6 +53,7 @@ numeric_enum! {
         HvConfigCheck = 6,
         HvVirtioPCI = 7,
         HvZoneSetBootMode = 8,
+        HvGetEcamBase = 9,
     }
 }
 pub const SGI_IPI_ID: u64 = 7;
@@ -105,6 +106,7 @@ impl<'a> HyperCall<'a> {
                 HyperCallCode::HvConfigCheck => self.hv_zone_config_check(arg0 as *mut u64),
                 HyperCallCode::HvVirtioPCI => self.hv_virtio_pci(arg0, arg1),
                 HyperCallCode::HvZoneSetBootMode => self.hv_zone_set_boot_mode(arg0, arg1),
+                HyperCallCode::HvGetEcamBase => self.hv_get_ecam_base(arg0 as *mut u64),
                 _ => {
                     warn!("hypercall id={} unsupported!", code as u64);
                     Ok(0)
