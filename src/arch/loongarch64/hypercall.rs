@@ -14,7 +14,6 @@
 // Authors:
 //  ForeverYolo <2572131118@qq.com>
 
-use crate::arch::cpu::this_cpu_id;
 use crate::config::HvZoneConfig;
 use crate::config::CONFIG_MAGIC_VERSION;
 use crate::hypercall::HyperCall;
@@ -52,11 +51,6 @@ impl<'a> HyperCall<'a> {
     pub fn hv_get_real_list_pa(&mut self, list_addr: u64) -> u64 {
         // LoongArch64 does not have a specific prefix for cached memory, so we return the address as is.
         return list_addr;
-    }
-
-    pub fn check_cpu_id(&self) {
-        let cpuid = this_cpu_id();
-        assert_eq!(cpuid, 0);
     }
 
     pub fn hv_virtio_get_irq(&self, virtio_irq: *mut u32) -> HyperCallResult {
