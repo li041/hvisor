@@ -66,6 +66,7 @@ hvisor 是一个用 Rust 实现的 Type-1 裸机虚拟机监控器，采用分�
 - [x] Rockchip RK3568
 - [x] Forlinx OK6254-C
 - [x] Phytium Pi
+- [x] Jetson Orin
 
 ### riscv64
 
@@ -73,6 +74,7 @@ hvisor 是一个用 Rust 实现的 Type-1 裸机虚拟机监控器，采用分�
 - [x] Milk-V Megrez
 - [x] Sifive Hifive Premier P550
 - [x] dp-1000
+- [x] Spacemit k3-com260
 - [ ] FPGA 香山（昆明湖）on S2C Prodigy S7-19PS-2
 
 ### loongarch64
@@ -93,7 +95,8 @@ hvisor 是一个用 Rust 实现的 Type-1 裸机虚拟机监控器，采用分�
 - [x] Zephyr AArch32
 - [x] RT-Thread
 - [x] Android
-- [ ] OpenHarmony
+- [x] OpenHarmony
+- [x] Asterinas
 
 ## 开始使用
 
@@ -105,22 +108,25 @@ hvisor 是一个用 Rust 实现的 Type-1 裸机虚拟机监控器，采用分�
 - [更新日志](./CHANGELOG.md)
 - 支持 USB zoneU 直通
 - 支持 PCIe 总线虚拟化
+- 支持 Android
+- 支持 OpenHarmony
+- 支持 Jetson Orin
+- 支持 IOMMU 虚拟化（Intel VT-d / RISC-V 虚拟 IOMMU）
+- 支持时钟控制器虚拟化（virtio-scmi Clock 协议，ARM）
+- 支持 NPU zoneU 直通（sysoul_x3300-scmi）
 
 ### 计划中 
-- 支持 OpenHarmony
 - 支持 ARMv9
 - 支持 GICv4
 - 支持缓存着色
-- 支持 SR-IOV
-- 支持 NPU zoneU 直通
 - 支持 Nvidia GPU zoneU 直通
+- 支持 ARM SMMU 虚拟化
+- 支持 x86_64 时钟控制器虚拟化
+- 支持 SR-IOV
 - Web Management tool
 - 设备树配置工具
-- 支持 Nvidia Orin
 - 支持 Nvidia Thor
 - 支持 Raspberry Pi 5
-- 支持 IOMMU 虚拟化
-- 支持 时钟控制器 虚拟化
 - 支持 pinctrl 虚拟化
 - 支持无 zone0 启动 zoneU / zoneR
 
