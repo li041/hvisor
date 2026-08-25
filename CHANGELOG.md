@@ -2,7 +2,34 @@
 
 > ⚠️ Please update this file for any changes to the hvisor project along with your name and GitHub profile link under the CURRENT section.
 
-## CURRENT - v0.5
+## CURRENT - v0.6
+
+- [feature] **PCIe/virtio**: Add emulated virtio PCI device support. ([PR #287](https://github.com/syswonder/hvisor/pull/287), [ZZJJWarth](https://github.com/ZZJJWarth))
+- [ci] Update CI workflow, add license / format checks, restore manual workflow triggers, and update CI terminal output. ([PR #302](https://github.com/syswonder/hvisor/pull/302), [PR #306](https://github.com/syswonder/hvisor/pull/306), [PR #360](https://github.com/syswonder/hvisor/pull/360), [Xingyu Chen](https://github.com/dallasxy))
+- [feature] **aarch64**: Extend VCPU state handling. ([PR #303](https://github.com/syswonder/hvisor/pull/303), [Jingyu Liu](https://github.com/liulog))
+- [feature] **riscv64**: Add virtual **RISC-V IOMMU** support. ([PR #307](https://github.com/syswonder/hvisor/pull/307), [Jingyu Liu](https://github.com/liulog))
+- [bugfix] Detect and diagnose hvisor memory region overlap with the root zone, and add overlap checks between MMIO passthrough and MMIO intercept handler regions. ([PR #311](https://github.com/syswonder/hvisor/pull/311), [PR #384](https://github.com/syswonder/hvisor/pull/384), [Inquisitor-201](https://github.com/Inquisitor-201), [Solicey](https://github.com/Solicey))
+- [bugfix] **aarch64**: Use `dc civac` instead of `dc ivac` in `invalidate_dcache_range`. ([PR #312](https://github.com/syswonder/hvisor/pull/312), [Inquisitor-201](https://github.com/Inquisitor-201))
+- [refactor] Remove redundant frame allocator wrappers, fix alignment parameter semantics, and fix `alloc_contiguous` alignment. ([PR #316](https://github.com/syswonder/hvisor/pull/316), [PR #359](https://github.com/syswonder/hvisor/pull/359), [Nehckl](https://github.com/Inquisitor-201), [Jingyu Liu](https://github.com/liulog))
+- [refactor] Migrate platform options from Cargo features to **Kconfig**. ([PR #319](https://github.com/syswonder/hvisor/pull/319), [Xingyu Chen](https://github.com/dallasxy))
+- [feature] **PCIe**: Add **DWC MSI** injection and **SR-IOV** support (VF enumeration, capability handler, ARI). ([PR #321](https://github.com/syswonder/hvisor/pull/321), [PR #358](https://github.com/syswonder/hvisor/pull/358), [Zhongkai Xu](https://github.com/ZhongkaiXu))
+- [feature] **aarch64**: Support **OpenHarmony** on dayu200 platform. ([PR #357](https://github.com/syswonder/hvisor/pull/357), [Stone749990226](https://github.com/Stone749990226))
+- [feature] **x86_64**: Boot **Asterinas** as zone1 via Multiboot2, with virtio-console support, x2APIC timer virtualization, IOAPIC fixes, and dedicated Jenkins CI. ([PR #362](https://github.com/syswonder/hvisor/pull/362), [PR #376](https://github.com/syswonder/hvisor/pull/376), [yyda](https://github.com/yydawx))
+- [config] Complete PCI fields in zone examples. ([PR #363](https://github.com/syswonder/hvisor/pull/363), [Jaxtonmax](https://github.com/Jaxtonmax))
+- [feature] **riscv64**: Add **RVA23** ISA features for QEMU platforms. ([PR #364](https://github.com/syswonder/hvisor/pull/364), [Jingyu Liu](https://github.com/liulog))
+- [platform] **aarch64**: Add support for **Jetson Orin** with UEFI memory map virtualization. ([PR #366](https://github.com/syswonder/hvisor/pull/366), [Ren HangQi](https://github.com/ForeverYolo))
+- [feature] **x86_64**: Add a hypercall to query the ECAM base. ([PR #377](https://github.com/syswonder/hvisor/pull/377), [yyda](https://github.com/yydawx))
+- [platform] **riscv64**: Add initial support for **Spacemit k3-com260**. ([PR #378](https://github.com/syswonder/hvisor/pull/378), [Jingyu Liu](https://github.com/liulog))
+- [feature] **rk3588 (sysoul_x3300)**: Add Linux NPU / GPU / display zone configurations via SCMI. ([PR #379](https://github.com/syswonder/hvisor/pull/379), [agicy](https://github.com/agicy))
+- [feature] **loongarch64**: Make SMP IPI and Virtio IRQ delivery stateful, track guest-to-physical CPU mappings, and fix Virtio consuming too much CPU. ([PR #380](https://github.com/syswonder/hvisor/pull/380), [Xinhao Li](https://github.com/li041), [Stl_](https://github.com/weifenjihe))
+- [ci] **aarch64**: Add hardware CI for rk3568 and phytium-pi. ([PR #381](https://github.com/syswonder/hvisor/pull/381), [Xingyu Chen](https://github.com/dallasxy))
+- [bugfix] **loongarch64**: Preserve firmware PCI bridge bus numbers. ([PR #386](https://github.com/syswonder/hvisor/pull/386), [Stl_](https://github.com/weifenjihe))
+- [infra] Support older Python environments in Kconfig tooling and fix the LoongArch release build. ([Xinhao Li](https://github.com/li041), [Stl_](https://github.com/weifenjihe))
+- [bugfix] **aarch64**: Refine early boot assembly. ([Nehckl](https://github.com/Inquisitor-201))
+
+## History Release
+
+## hvisor - v0.5
 
 - [platform] **aarch64**: Add support for **sysoul_x3300**. ([agicy](https://github.com/agicy))
 - [feature] **aarch64**: Add dual-zone Linux / Android deployment. ([agicy](https://github.com/agicy))
@@ -23,8 +50,6 @@
 - [ci] Expand board build / test coverage. ([Jingyu Liu](https://github.com/liulog))
 - [ci] Add CI / CD support for **x86_64**. ([Tianhong Liu](https://github.com/Solicey))
 - [ci] Add performance benchmarking scripts for QEMU platforms. ([Xinhao Li](https://github.com/li041))
-
-## History Release
 
 ## hvisor - v0.4
 
@@ -53,7 +78,7 @@
 - [platform] **aarch64**: Improve QEMU GICv2/GICv3 configurations and add zone1-linux support. ([agicy](https://github.com/agicy))
 - [platform] **loongarch64**: Add support for Loongson 3A5 / 3A6 platforms and improve clock and trap handling. ([wheatfox](https://github.com/enkerewpo))
 - [feature] Add **aarch32** support. ([Guowei Li](https://github.com/KouweiLee))
-- [feature] **riscv64** enhancements: g-stage dynamic detection, eic770x_soc, and syscrg emulation. ([Jingyu Liu](https://github.com/liulog))
+- [feature] **riscv64** enhancements: g-stage dynamic detection, hypervisor_v0_6 (EIC770x SoC), and syscrg emulation. ([Jingyu Liu](https://github.com/liulog))
 - [infra] Unify UART / MPIDR mapping, centralize IOMMU configuration, remove redundant arch feature flags, and tidy Cargo/zone/hypercall code. ([Nehckl](https://github.com/Inquisitor-201), [Ren HangQi](https://github.com/ForeverYolo))
 - [infra/tool] **aarch64**: Optimized the structure of GIC parameters ([Ren HangQi](https://github.com/ForeverYolo))
 - [ci/misc] Update dependencies, add ccache support, and improve build/tooling workflows. ([Jingyu Liu](https://github.com/liulog))

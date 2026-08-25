@@ -16,27 +16,34 @@
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 // use psci::error::INVALID_ADDRESS;
-use crate::consts::{INVALID_ADDRESS, MAX_CPU_NUM};
+use crate::consts::{INVALID_ADDRESS, MAX_CPU_NUM, MAX_ZONE_NUM};
 use crate::pci::pci_struct::VirtualRootComplex;
-use spin::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+use spin::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
-#[cfg(feature = "dwc_pcie")]
+#[cfg(dwc_pcie)]
 use crate::pci::{config_accessors::dwc_atu::AtuConfig, PciConfigAddress};
-#[cfg(feature = "dwc_pcie")]
+#[cfg(dwc_pcie)]
 use alloc::collections::btree_map::BTreeMap;
 
 use crate::arch::mm::new_s2_memory_set;
 use crate::arch::s2pt::Stage2PageTable;
-use crate::config::{HvZoneConfig, CONFIG_NAME_MAXLEN};
+use crate::config::{HvZoneBootMode, HvZoneConfig, CONFIG_NAME_MAXLEN};
 
 use crate::cpu_data::{get_cpu_data, this_zone, CpuSet};
 use crate::error::HvResult;
 use crate::memory::addr::GuestPhysAddr;
-use crate::memory::{MMIOConfig, MMIOHandler, MMIORegion, MemorySet};
+use crate::memory::{MMIOConfig, MMIOHandler, MMIORegion, MemoryRegion, MemorySet};
 use core::panic;
 use core::sync::atomic::{AtomicBool, Ordering};
 
-#[cfg(feature = "dwc_pcie")]
+#[cfg(all(pci_init_delay, dwc_pcie))]
+use crate::config::{HvPciConfig, HvPciDevConfig, CONFIG_MAX_PCI_DEV, CONFIG_PCI_BUS_MAXNUM};
+#[cfg(all(pci_init_delay, dwc_pcie))]
+use crate::pci::pci_config::GLOBAL_PCIE_LIST;
+#[cfg(all(pci_init_delay, dwc_pcie))]
+use crate::pci::pci_struct::Bdf;
+
+#[cfg(dwc_pcie)]
 #[derive(Debug)]
 pub struct VirtualAtuConfigs {
     ecam_to_atu: BTreeMap<usize, AtuConfig>,
@@ -44,7 +51,7 @@ pub struct VirtualAtuConfigs {
     cfg_base_to_ecam: BTreeMap<PciConfigAddress, usize>,
 }
 
-#[cfg(feature = "dwc_pcie")]
+#[cfg(dwc_pcie)]
 impl VirtualAtuConfigs {
     pub fn new() -> Self {
         Self {
@@ -64,13 +71,6 @@ impl VirtualAtuConfigs {
 
     pub fn insert_atu(&mut self, ecam_base: usize, atu: AtuConfig) -> Option<AtuConfig> {
         self.ecam_to_atu.insert(ecam_base, atu)
-    }
-
-    pub fn get_or_insert_atu<F>(&mut self, ecam_base: usize, f: F) -> &mut AtuConfig
-    where
-        F: FnOnce() -> AtuConfig,
-    {
-        self.ecam_to_atu.entry(ecam_base).or_insert_with(f)
     }
 
     pub fn get_atu_by_io_base(&self, io_base: PciConfigAddress) -> Option<&AtuConfig> {
@@ -119,11 +119,15 @@ pub struct ZoneInner {
     mmio: Vec<MMIOConfig>,
     cpu_num: usize,
     cpu_set: CpuSet,
+    // Guest-visible CPU ids are not guaranteed to be dense or equal to pCPU ids.
+    // Keep explicit maps here; CpuSet only records physical CPU ownership.
+    guest_to_phys_cpu: [Option<usize>; MAX_CPU_NUM],
+    phys_to_guest_cpu: [Option<usize>; MAX_CPU_NUM],
     irq_bitmap: [u32; 1024 / 32],
     gpm: MemorySet<Stage2PageTable>,
     iommu_pt: Option<MemorySet<Stage2PageTable>>,
     vpci_bus: VirtualRootComplex,
-    #[cfg(feature = "dwc_pcie")]
+    #[cfg(dwc_pcie)]
     atu_configs: VirtualAtuConfigs,
 }
 
@@ -174,14 +178,16 @@ impl ZoneInner {
             mmio: Vec::new(),
             cpu_num: 0,
             cpu_set: CpuSet::new(MAX_CPU_NUM as usize, 0),
+            guest_to_phys_cpu: [None; MAX_CPU_NUM],
+            phys_to_guest_cpu: [None; MAX_CPU_NUM],
             irq_bitmap: [0; 1024 / 32],
-            iommu_pt: if cfg!(feature = "iommu") {
+            iommu_pt: if cfg!(iommu) {
                 Some(new_s2_memory_set())
             } else {
                 None
             },
             vpci_bus: VirtualRootComplex::new(),
-            #[cfg(feature = "dwc_pcie")]
+            #[cfg(dwc_pcie)]
             atu_configs: VirtualAtuConfigs::new(),
         }
     }
@@ -215,6 +221,15 @@ impl ZoneInner {
         handler: MMIOHandler,
         arg: usize,
     ) {
+        // TODO: add error handling instead of just warning.
+        // See https://github.com/syswonder/hvisor/issues/385
+        if self.gpm.is_range_overlap(start, size) {
+            warn!(
+                "MMIO handler region [{:#x}, {:#x}) overlaps with passthrough region",
+                start,
+                start + size
+            );
+        }
         if let Some(mmio) = self.mmio.iter_mut().find(|mmio| mmio.region.start == start) {
             warn!("duplicated mmio region {:#x?}", mmio);
             if mmio.region.size != size {
@@ -253,6 +268,29 @@ impl ZoneInner {
             .find(|cfg| cfg.region.contains_region(addr, size))
             .map(|cfg| (cfg.region, cfg.handler, cfg.arg))
     }
+    /// Check whether `[start, start+size)` overlaps with any registered MMIO handler region.
+    pub fn is_mmio_handler_overlap(&self, start: GuestPhysAddr, size: usize) -> bool {
+        let region = MMIORegion { start, size };
+        self.mmio
+            .iter()
+            .any(|cfg| cfg.region.is_overlap_with(&region))
+    }
+    /// Insert a passthrough region, warning if it overlaps an MMIO handler region.
+    pub fn insert_passthrough_region_quiet(
+        &mut self,
+        region: MemoryRegion<GuestPhysAddr>,
+    ) -> HvResult {
+        // TODO: add error handling instead of just warning.
+        // See https://github.com/syswonder/hvisor/issues/385
+        if self.is_mmio_handler_overlap(region.start, region.size) {
+            warn!(
+                "passthrough region [{:#x}, {:#x}) overlaps with MMIO handler region",
+                region.start,
+                region.start + region.size
+            );
+        }
+        self.gpm.try_insert_quiet(region)
+    }
     /// If irq_id belongs to this zone
     pub fn irq_in_zone(&self, irq_id: u32) -> bool {
         let idx = (irq_id / 32) as usize;
@@ -274,6 +312,36 @@ impl ZoneInner {
 
     pub fn cpu_set_mut(&mut self) -> &mut CpuSet {
         &mut self.cpu_set
+    }
+
+    pub fn map_cpu(&mut self, guest_cpu: usize, phys_cpu: usize) {
+        if guest_cpu >= MAX_CPU_NUM || phys_cpu >= MAX_CPU_NUM {
+            warn!(
+                "ignore invalid CPU map guest_cpu={}, phys_cpu={}",
+                guest_cpu, phys_cpu
+            );
+            return;
+        }
+        if let Some(old_phys_cpu) = self.guest_to_phys_cpu[guest_cpu] {
+            if self.phys_to_guest_cpu[old_phys_cpu] == Some(guest_cpu) {
+                self.phys_to_guest_cpu[old_phys_cpu] = None;
+            }
+        }
+        if let Some(old_guest_cpu) = self.phys_to_guest_cpu[phys_cpu] {
+            if self.guest_to_phys_cpu[old_guest_cpu] == Some(phys_cpu) {
+                self.guest_to_phys_cpu[old_guest_cpu] = None;
+            }
+        }
+        self.guest_to_phys_cpu[guest_cpu] = Some(phys_cpu);
+        self.phys_to_guest_cpu[phys_cpu] = Some(guest_cpu);
+    }
+
+    pub fn guest_to_phys_cpu(&self, guest_cpu: usize) -> Option<usize> {
+        self.guest_to_phys_cpu.get(guest_cpu).copied().flatten()
+    }
+
+    pub fn phys_to_guest_cpu(&self, phys_cpu: usize) -> Option<usize> {
+        self.phys_to_guest_cpu.get(phys_cpu).copied().flatten()
     }
 
     pub fn irq_bitmap(&self) -> &[u32; 1024 / 32] {
@@ -308,18 +376,476 @@ impl ZoneInner {
         &mut self.vpci_bus
     }
 
-    #[cfg(feature = "dwc_pcie")]
+    #[cfg(dwc_pcie)]
     pub fn atu_configs(&self) -> &VirtualAtuConfigs {
         &self.atu_configs
     }
 
-    #[cfg(feature = "dwc_pcie")]
+    #[cfg(dwc_pcie)]
     pub fn atu_configs_mut(&mut self) -> &mut VirtualAtuConfigs {
         &mut self.atu_configs
+    }
+
+    #[cfg(all(pci_init_delay, dwc_pcie))]
+    pub fn guest_pci_init_delay(
+        &mut self,
+        _zone_id: usize,
+        alloc_pci_devs: &[HvPciDevConfig; CONFIG_MAX_PCI_DEV],
+        num_pci_devs: u64,
+        pci_config: &[HvPciConfig],
+        _num_pci_config: usize,
+        domain_id: u8,
+    ) -> HvResult {
+        let guard = GLOBAL_PCIE_LIST.lock();
+        for target_pci_config in pci_config {
+            // Skip empty config
+            if target_pci_config.ecam_base == 0 || target_pci_config.domain != domain_id {
+                continue;
+            }
+
+            #[allow(unused_variables)]
+            let ecam_base = target_pci_config.ecam_base;
+            let target_domain = target_pci_config.domain;
+            let bus_range_begin = target_pci_config.bus_range_begin as u8;
+
+            // Create accessor for VirtualRootComplex, similar to RootComplex
+            #[cfg(dwc_pcie)]
+            {
+                use crate::pci::config_accessors::dwc::DwcConfigAccessor;
+                use crate::platform;
+                use alloc::sync::Arc;
+
+                let atu_config = platform::ROOT_DWC_ATU_CONFIG
+                    .iter()
+                    .find(|atu_cfg| atu_cfg.ecam_base == ecam_base);
+
+                match atu_config {
+                    Some(cfg) => {
+                        let root_bus = bus_range_begin;
+                        let accessor = Arc::new(DwcConfigAccessor::new(cfg, root_bus));
+                        self.vpci_bus_mut().set_accessor(accessor);
+                    }
+                    None => {
+                        warn!("No ATU config found for ecam_base 0x{:x}", ecam_base);
+                        continue;
+                    }
+                }
+            }
+
+            #[cfg(loongarch64_pcie)]
+            {
+                use crate::pci::config_accessors::loongarch64::LoongArchConfigAccessor;
+                use alloc::sync::Arc;
+
+                let root_bus = bus_range_begin;
+                let accessor = Arc::new(LoongArchConfigAccessor::new(
+                    ecam_base,
+                    target_pci_config.ecam_size,
+                    root_bus,
+                ));
+                self.vpci_bus_mut().set_accessor(accessor);
+            }
+
+            #[cfg(ecam_pcie)]
+            {
+                use crate::pci::config_accessors::ecam::EcamConfigAccessor;
+                use alloc::sync::Arc;
+
+                let accessor = Arc::new(EcamConfigAccessor::new(ecam_base));
+                self.vpci_bus_mut().set_accessor(accessor);
+            }
+
+            let mut filtered_devices: alloc::vec::Vec<HvPciDevConfig> = alloc::vec::Vec::new();
+            for i in 0..num_pci_devs {
+                let dev_config = alloc_pci_devs[i as usize];
+                if dev_config.domain == target_domain {
+                    filtered_devices.push(dev_config);
+                }
+            }
+
+            // Skip if no devices for this domain
+            if filtered_devices.is_empty() {
+                continue;
+            }
+
+            filtered_devices.sort_by(|a, b| {
+                a.bus
+                    .cmp(&b.bus)
+                    .then_with(|| a.device.cmp(&b.device))
+                    .then_with(|| a.function.cmp(&b.function))
+            });
+
+            let mut domain_msi_count: u32 = 0;
+
+            for dev_config in &filtered_devices {
+                let bdf = Bdf::new_from_config(*dev_config);
+                let vbdf = Bdf::new(
+                    bdf.domain(),
+                    dev_config.v_bus,
+                    dev_config.v_device,
+                    dev_config.v_function,
+                );
+
+                info!("set bdf {:#?} to vbdf {:#?}", bdf, vbdf);
+
+                #[cfg(any(
+                    all(iommu, target_arch = "aarch64"),
+                    all(iommu, target_arch = "riscv64"),
+                    target_arch = "x86_64"
+                ))]
+                {
+                    let iommu_pt_addr = if self.iommu_pt().is_some() {
+                        self.iommu_pt().unwrap().root_paddr()
+                    } else {
+                        0
+                    };
+                    let device_id = (dev_config.bus as usize) << 8
+                        | (dev_config.device as usize) << 3
+                        | dev_config.function as usize;
+                    #[cfg(share_s2pt)]
+                    crate::device::iommu::iommu_add_device_with_root_pt_addr(
+                        _zone_id,
+                        device_id as _,
+                        self.gpm().root_paddr(),
+                    );
+                    #[cfg(not(share_s2pt))]
+                    crate::device::iommu::iommu_add_device_with_root_pt_addr(
+                        _zone_id,
+                        device_id as _,
+                        iommu_pt_addr,
+                    );
+                }
+
+                // Insert device into vpci_bus with calculated vbdf
+                if let Some(dev) = guard.get(&bdf) {
+                    if bdf.is_host_bridge(dev.read().get_host_bdf().bus())
+                        || dev.with_config_value(|config_value| -> bool {
+                            config_value.get_class().0 == 0x6
+                        })
+                    {
+                        let mut vdev = dev.read().config_space.clone();
+                        vdev.set_vbdf_with_bus_map(
+                            vbdf,
+                            target_pci_config.bus_range_end as u8,
+                            &filtered_devices,
+                        );
+                        let msi_count = vdev.get_msi_count();
+                        domain_msi_count += msi_count;
+                        self.vpci_bus_mut().insert(vbdf, vdev);
+                    } else {
+                        // Allow allocation if zone_id is None (unassigned), or if zone_id is
+                        // Some(0) and the device is a SRIOV VF (initially assigned to root zone
+                        // during enumeration, can be reassigned to a guest zone).
+                        let is_sriov_vf_from_root = dev.get_zone_id() == Some(0)
+                            && dev.read().get_sriov_vf_info().is_some();
+                        let is_pf = dev.read().get_sriov_info().is_some();
+                        if dev.get_zone_id().is_none() || is_sriov_vf_from_root {
+                            if is_pf && _zone_id != 0 {
+                                warn!(
+                                    "The SR-IOV PF {:#x?} can only be assigned to the root VM",
+                                    bdf
+                                );
+                            } else {
+                                dev.set_zone_id(Some(_zone_id as u32));
+                                let mut vdev_inner = dev.read().config_space.clone();
+                                vdev_inner.set_vbdf_with_bus_map(
+                                    vbdf,
+                                    target_pci_config.bus_range_end as u8,
+                                    &filtered_devices,
+                                );
+                                let msi_count = vdev_inner.get_msi_count();
+                                domain_msi_count += msi_count;
+                                self.vpci_bus_mut().insert(vbdf, vdev_inner);
+                            }
+                        } else {
+                            warn!(
+                                "Device {:#?} is already allocated to zone {:?}",
+                                bdf,
+                                dev.get_zone_id()
+                            );
+                        }
+                    }
+                } else {
+                    warn!("can not find dev {:#?} in GLOBAL_PCIE_LIST (not detected during enumeration)", bdf);
+                    #[cfg(ecam_pcie)]
+                    {
+                        use crate::pci::pci_struct::VirtualPciConfigSpace;
+                        use crate::pci::vpci_dev::{get_handler, VpciDevType};
+
+                        let dev_type = dev_config.dev_type;
+                        match dev_type {
+                            VpciDevType::Physical => {
+                                warn!("can not find dev {:#?}", bdf);
+                            }
+                            _ => {
+                                if let Some(_handler) = get_handler(dev_type) {
+                                    let base = ecam_base
+                                        + ((bdf.bus() as u64) << 20)
+                                        + ((bdf.device() as u64) << 15)
+                                        + ((bdf.function() as u64) << 12);
+                                    let dev = VirtualPciConfigSpace::virt_dev(bdf, base, dev_type);
+                                    self.vpci_bus_mut().insert(vbdf, dev);
+                                } else {
+                                    warn!("can not find dev {:#?}, unknown device type", bdf);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // After processing all devices for this domain, allocate hardware MSI bits
+            if domain_msi_count > 0 {
+                #[cfg(all(dwc_msi, dwc_pcie))]
+                {
+                    // Get the DW MSI domain allocator and allocate hwbit
+                    if let Some(mut domain_lock) =
+                        crate::pci::dwc_msi::get_dwc_msi_domain_mut(target_domain)
+                    {
+                        if let Some(domain_msi) = domain_lock.get_mut(&target_domain) {
+                            let zone_cpu_set = self.cpu_set();
+                            let target_cpu = zone_cpu_set.first_cpu().unwrap_or(0);
+                            match domain_msi.allocate_for_cpu(target_cpu, domain_msi_count) {
+                                Ok(hwirq_bit) => {
+                                    // Register the MSI info for this domain
+                                    self.vpci_bus_mut().add_msi_count_for_domain(
+                                        target_domain,
+                                        domain_msi_count,
+                                        hwirq_bit,
+                                    );
+                                }
+                                Err(e) => {
+                                    warn!(
+                                        "Failed to allocate MSI for domain {}: {:?}",
+                                        target_domain, e
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+
+                #[cfg(not(dwc_msi))]
+                {
+                    // Without dwc_msi feature, just register without hardware bit allocation
+                    self.vpci_bus_mut().add_msi_count_for_domain(
+                        target_domain,
+                        domain_msi_count,
+                        0, // hwirq_bit is 0 when not using dwc_msi
+                    );
+                }
+            }
+        }
+        info!("vpci bus init done\n {:#x?}", self.vpci_bus());
+        Ok(())
+    }
+
+    #[cfg(all(pci_init_delay, dwc_pcie))]
+    pub fn virtual_pci_dbi_pref_init(
+        &mut self,
+        pci_rootcomplex_config: &[HvPciConfig; CONFIG_PCI_BUS_MAXNUM],
+        _num_pci_config: usize,
+    ) {
+        use crate::memory::mmio_generic_handler;
+        use crate::pci::pci_handler::mmio_vpci_handler_dbi;
+        use crate::platform;
+
+        for rootcomplex_config in pci_rootcomplex_config {
+            if rootcomplex_config.ecam_base == 0 {
+                continue;
+            }
+
+            let encoded_arg =
+                rootcomplex_config.ecam_base as usize + (rootcomplex_config.domain as usize);
+            self.mmio_region_register(
+                rootcomplex_config.ecam_base as usize,
+                rootcomplex_config.ecam_size as usize,
+                mmio_vpci_handler_dbi,
+                encoded_arg,
+            );
+
+            let extend_config = platform::ROOT_DWC_ATU_CONFIG
+                .iter()
+                .find(|cfg| cfg.ecam_base == rootcomplex_config.ecam_base);
+            if let Some(extend_config) = extend_config {
+                if extend_config.apb_base != 0 && extend_config.apb_size != 0 {
+                    self.mmio_region_register(
+                        extend_config.apb_base as usize,
+                        extend_config.apb_size as usize,
+                        mmio_generic_handler,
+                        extend_config.apb_base as usize,
+                    );
+                }
+            }
+        }
+    }
+
+    #[cfg(all(pci_init_delay, dwc_pcie))]
+    pub fn virtual_pci_mmio_init_delay(
+        &mut self,
+        pci_rootcomplex_config: &[HvPciConfig; CONFIG_PCI_BUS_MAXNUM],
+        _num_pci_config: usize,
+        domain_id: u8,
+    ) {
+        #[cfg(loongarch64_pcie)]
+        let mut emergency_map_regions: alloc::vec::Vec<(usize, usize)> = alloc::vec::Vec::new();
+
+        for rootcomplex_config in pci_rootcomplex_config {
+            if rootcomplex_config.ecam_base == 0 || rootcomplex_config.domain != domain_id {
+                continue;
+            }
+            #[cfg(ecam_pcie)]
+            {
+                use crate::pci::pci_handler::mmio_vpci_handler;
+
+                self.mmio_region_register(
+                    rootcomplex_config.ecam_base as usize,
+                    rootcomplex_config.ecam_size as usize,
+                    mmio_vpci_handler,
+                    rootcomplex_config.ecam_base as usize,
+                );
+            }
+            #[cfg(dwc_pcie)]
+            {
+                use crate::memory::mmio_generic_handler;
+                use crate::pci::config_accessors::dwc_atu::AtuConfig;
+                use crate::pci::config_accessors::{dwc::DwcConfigRegionBackend, PciRegionMmio};
+                use crate::pci::pci_handler::{
+                    mmio_dwc_cfg_handler, mmio_dwc_io_handler, mmio_vpci_handler_dbi,
+                };
+                use crate::platform;
+
+                let encoded_arg =
+                    rootcomplex_config.ecam_base as usize + (rootcomplex_config.domain as usize);
+                self.mmio_region_register(
+                    rootcomplex_config.ecam_base as usize,
+                    rootcomplex_config.ecam_size as usize,
+                    mmio_vpci_handler_dbi,
+                    encoded_arg,
+                );
+
+                let extend_config = platform::ROOT_DWC_ATU_CONFIG
+                    .iter()
+                    .find(|extend_cfg| extend_cfg.ecam_base == rootcomplex_config.ecam_base);
+
+                if let Some(extend_config) = extend_config {
+                    if extend_config.apb_base != 0 && extend_config.apb_size != 0 {
+                        self.mmio_region_register(
+                            extend_config.apb_base as usize,
+                            extend_config.apb_size as usize,
+                            mmio_generic_handler,
+                            extend_config.apb_base as usize,
+                        );
+                    }
+
+                    let cfg_size_half = extend_config.cfg_size / 2;
+                    let cfg0_base = extend_config.cfg_base;
+                    if cfg0_base != 0 && cfg_size_half != 0 {
+                        self.mmio_region_register(
+                            cfg0_base as usize,
+                            cfg_size_half as usize,
+                            mmio_dwc_cfg_handler,
+                            cfg0_base as usize,
+                        );
+                    }
+
+                    let cfg1_base = extend_config.cfg_base + cfg_size_half;
+                    if cfg1_base != 0 && cfg_size_half != 0 {
+                        self.mmio_region_register(
+                            cfg1_base as usize,
+                            cfg_size_half as usize,
+                            mmio_dwc_cfg_handler,
+                            cfg1_base as usize,
+                        );
+                    }
+
+                    if extend_config.io_cfg_atu_shared != 0 {
+                        self.mmio_region_register(
+                            rootcomplex_config.io_base as usize,
+                            rootcomplex_config.io_size as usize,
+                            mmio_dwc_io_handler,
+                            rootcomplex_config.io_base as usize,
+                        );
+                    }
+
+                    let mut atu = AtuConfig::default();
+
+                    let dbi_base = extend_config.dbi_base as crate::pci::PciConfigAddress;
+                    let dbi_size = extend_config.dbi_size;
+                    let dbi_region = PciRegionMmio::new(dbi_base, dbi_size);
+                    let dbi_backend = DwcConfigRegionBackend::new(dbi_region);
+                    if let Err(e) = atu.init_limit_hw_value(&dbi_backend) {
+                        warn!("Failed to initialize ATU0 limit defaults: {:?}", e);
+                    }
+
+                    self.atu_configs_mut()
+                        .insert_atu(rootcomplex_config.ecam_base as usize, atu);
+                    self.atu_configs_mut().insert_cfg_base_mapping(
+                        extend_config.cfg_base as crate::pci::PciConfigAddress,
+                        rootcomplex_config.ecam_base as usize,
+                    );
+                    self.atu_configs_mut().insert_cfg_base_mapping(
+                        cfg1_base as crate::pci::PciConfigAddress,
+                        rootcomplex_config.ecam_base as usize,
+                    );
+                    self.atu_configs_mut().insert_io_base_mapping(
+                        rootcomplex_config.io_base as crate::pci::PciConfigAddress,
+                        rootcomplex_config.ecam_base as usize,
+                    );
+                }
+            }
+            #[cfg(loongarch64_pcie)]
+            {
+                use crate::pci::pci_handler::mmio_vpci_direct_handler;
+
+                self.mmio_region_register(
+                    rootcomplex_config.ecam_base as usize,
+                    rootcomplex_config.ecam_size as usize,
+                    mmio_vpci_direct_handler,
+                    rootcomplex_config.ecam_base as usize,
+                );
+                emergency_map_regions.push((
+                    rootcomplex_config.ecam_base as usize,
+                    rootcomplex_config.ecam_size as usize,
+                ));
+            }
+            #[cfg(not(any(ecam_pcie, dwc_pcie, loongarch64_pcie)))]
+            {
+                warn!(
+                    "No extend config found for base 0x{:x}",
+                    rootcomplex_config.ecam_base
+                );
+            }
+        }
+
+        // Note: emergency_map_regions requires access to self (for Zone), so this must be handled at Zone level
     }
 }
 
 static ZONE_LIST: RwLock<Vec<Arc<Zone>>> = RwLock::new(vec![]);
+static ZONE_BOOT_MODES: Mutex<[Option<HvZoneBootMode>; MAX_ZONE_NUM]> =
+    Mutex::new([None; MAX_ZONE_NUM]);
+
+pub fn set_zone_boot_mode(zone_id: usize, mode: HvZoneBootMode) {
+    if let Some(slot) = ZONE_BOOT_MODES.lock().get_mut(zone_id) {
+        *slot = Some(mode);
+    }
+}
+
+pub fn zone_boot_mode(zone_id: usize) -> HvZoneBootMode {
+    ZONE_BOOT_MODES
+        .lock()
+        .get(zone_id)
+        .copied()
+        .flatten()
+        .unwrap_or_default()
+}
+
+pub fn clear_zone_boot_mode(zone_id: usize) {
+    if let Some(slot) = ZONE_BOOT_MODES.lock().get_mut(zone_id) {
+        *slot = None;
+    }
+}
 
 pub fn root_zone() -> Arc<Zone> {
     ZONE_LIST.read().get(0).cloned().unwrap()
@@ -388,16 +914,70 @@ pub fn zone_create(config: &HvZoneConfig) -> HvResult<Arc<Zone>> {
     zone.pt_init(config.memory_regions())?;
     zone.mmio_init(&config.arch_config);
 
-    #[cfg(feature = "pci")]
+    let mut cpu_num = 0;
+    for (guest_cpu, cpu_id) in config.cpus().iter().enumerate() {
+        if let Some(existing_zone) = get_cpu_data(*cpu_id as _).zone.clone() {
+            return hv_result_err!(
+                EBUSY,
+                format!(
+                    "Failed to create zone: cpu {} already belongs to zone {}",
+                    cpu_id,
+                    existing_zone.id()
+                )
+            );
+        }
+        let cpu_id = *cpu_id as usize;
+        let mut zone_inner = zone.write();
+        zone_inner.cpu_set_mut().set_bit(cpu_id);
+        // The config lists physical CPUs, while guests use dense CPU ids from
+        // zero. Preserve that distinction for non-root SMP zones.
+        zone_inner.map_cpu(guest_cpu, cpu_id);
+        cpu_num += 1;
+    }
+    zone.write().set_cpu_num(cpu_num);
+
+    #[cfg(pci)]
     {
-        let _ = zone.virtual_pci_mmio_init(&config.pci_config, config.num_pci_bus as usize);
-        let _ = zone.guest_pci_init(
-            zone_id,
-            &config.alloc_pci_devs,
-            config.num_pci_devs,
-            &config.pci_config,
-            config.num_pci_bus as usize,
-        );
+        #[cfg(pci_init_delay)]
+        {
+            #[cfg(dwc_pcie)]
+            {
+                let num_pci_bus = config.num_pci_bus as usize;
+                if zone_id == 0 {
+                    let mut inner = zone.write();
+                    inner.virtual_pci_dbi_pref_init(&config.pci_config, num_pci_bus);
+                } else {
+                    let _ = zone.virtual_pci_mmio_init(&config.pci_config, num_pci_bus);
+                    let _ = zone.guest_pci_init(
+                        zone_id,
+                        &config.alloc_pci_devs,
+                        config.num_pci_devs,
+                        &config.pci_config,
+                        num_pci_bus,
+                    );
+                }
+            }
+        }
+
+        #[cfg(not(pci_init_delay))]
+        {
+            let _ = zone.virtual_pci_mmio_init(&config.pci_config, config.num_pci_bus as usize);
+            let _ = zone.guest_pci_init(
+                zone_id,
+                &config.alloc_pci_devs,
+                config.num_pci_devs,
+                &config.pci_config,
+                config.num_pci_bus as usize,
+            );
+        }
+    }
+
+    #[cfg(viommu)]
+    {
+        use crate::platform::{IOMMU_SYS_BASE, IOMMU_SYS_SIZE};
+        // Create viommu instance and register mmio handler for target zone.
+        crate::device::iommu::viommu_init(zone_id);
+        crate::device::iommu::viommu_mmio_handler_register(&zone, IOMMU_SYS_BASE, IOMMU_SYS_SIZE);
     }
 
     // #[cfg(target_arch = "aarch64")]
@@ -411,22 +991,6 @@ pub fn zone_create(config: &HvZoneConfig) -> HvResult<Arc<Zone>> {
     //     config.pci_config[0].ecam_size as _,
     // )?;
 
-    let mut cpu_num = 0;
-    for cpu_id in config.cpus().iter() {
-        if let Some(existing_zone) = get_cpu_data(*cpu_id as _).zone.clone() {
-            return hv_result_err!(
-                EBUSY,
-                format!(
-                    "Failed to create zone: cpu {} already belongs to zone {}",
-                    cpu_id,
-                    existing_zone.id()
-                )
-            );
-        }
-        zone.write().cpu_set_mut().set_bit(*cpu_id as _);
-        cpu_num += 1;
-    }
-    zone.write().set_cpu_num(cpu_num);
     let cpu_set = zone.read().cpu_set();
     info!("zone cpu_set: {:#b}", cpu_set.bitmap);
 
@@ -434,7 +998,7 @@ pub fn zone_create(config: &HvZoneConfig) -> HvResult<Arc<Zone>> {
     // #[cfg(target_arch = "aarch64")]
     // zone.ivc_init(config.ivc_config());
 
-    #[cfg(all(feature = "iommu", target_arch = "aarch64"))]
+    #[cfg(all(iommu, target_arch = "aarch64"))]
     zone.iommu_pt_init(config.memory_regions(), &config.arch_config)?;
 
     /* loongarch page table emergency */

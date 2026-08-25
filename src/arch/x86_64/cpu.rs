@@ -30,7 +30,7 @@ use crate::{
         vmx::*,
     },
     consts::{self, core_end, PER_CPU_SIZE},
-    cpu_data::{this_cpu_data, this_zone},
+    cpu_data::{this_cpu_data, this_zone, VcpuState},
     device::iommu,
     device::irqchip::pic::{check_pending_vectors, clear_vectors, ioapic, lapic::VirtLocalApic},
     error::{HvError, HvResult},
@@ -178,7 +178,6 @@ pub struct ArchCpu {
     guest_regs: GeneralRegisters,
     host_stack_top: u64,
     pub cpuid: usize,
-    pub power_on: bool,
     pub virt_lapic: VirtLocalApic,
     vmx_on: bool,
     vmcs_revision_id: u32,
@@ -194,7 +193,6 @@ impl ArchCpu {
             guest_regs: GeneralRegisters::default(),
             host_stack_top: 0,
             cpuid,
-            power_on: false,
             virt_lapic: VirtLocalApic::new(),
             vmx_on: false,
             vmcs_revision_id: 0,
@@ -228,7 +226,7 @@ impl ArchCpu {
 
         assert!(this_cpu_id() == self.cpuid);
 
-        self.power_on = false;
+        this_cpu_data().vcpu_state.store(VcpuState::Stopped);
         self.activate_vmx().unwrap();
 
         // info!("idle! cpuid: {:x}", self.cpuid);
@@ -270,7 +268,7 @@ impl ArchCpu {
     }
 
     pub fn run(&mut self) {
-        if self.power_on {
+        if this_cpu_data().vcpu_state.is_running() {
             // x86 wake up cpu will send ipi twice, but we only want once
             return;
         }
@@ -282,7 +280,7 @@ impl ArchCpu {
 
         // info!("run! cpuid: {:x}", self.cpuid);
 
-        self.power_on = true;
+        per_cpu.vcpu_state.store(VcpuState::Running);
         self.activate_vmx().unwrap();
 
         if !per_cpu.boot_cpu {
@@ -298,7 +296,7 @@ impl ArchCpu {
 
         if per_cpu.boot_cpu {
             // must be called after activate_gpm()
-            #[cfg(feature = "intel_vtd")]
+            #[cfg(intel_vtd)]
             iommu::activate();
             self.guest_regs = self.vm_launch_guest_regs.clone();
         }
@@ -319,6 +317,13 @@ impl ArchCpu {
     pub fn set_boot_cpu_vm_launch_regs(&mut self, rax: u64, rsi: u64) {
         self.vm_launch_guest_regs.rax = rax;
         self.vm_launch_guest_regs.rsi = rsi;
+    }
+
+    pub fn set_multiboot_boot_regs(&mut self, multiboot_info_addr: u64, kernel_entry: u64) {
+        const MULTIBOOT2_MAGIC: u64 = 0x36D76289;
+        self.vm_launch_guest_regs.rax = MULTIBOOT2_MAGIC;
+        self.vm_launch_guest_regs.rbx = multiboot_info_addr;
+        self.vm_launch_guest_regs.rsi = kernel_entry;
     }
 
     fn activate_vmx(&mut self) -> HvResult {
@@ -385,9 +390,11 @@ impl ArchCpu {
         Vmcs::clear(start_paddr)?;
         Vmcs::load(start_paddr)?;
 
+        // Setup VMCS control fields first (includes secondary controls like UNRESTRICTED_GUEST)
+        // This must be done before setup_vmcs_guest so that guest state is properly initialized
+        self.setup_vmcs_control()?;
         self.setup_vmcs_host(&self.host_stack_top as *const _ as usize)?;
         self.setup_vmcs_guest(entry, ROOT_ZONE_BOOT_STACK)?;
-        self.setup_vmcs_control()?;
 
         Ok(())
     }
@@ -468,7 +475,7 @@ impl ArchCpu {
         // pass-through exceptions, set I/O bitmap and MSR bitmaps
         VmcsControl32::EXCEPTION_BITMAP.write(0)?;
 
-        if self.power_on {
+        if this_cpu_data().vcpu_state.is_running() {
             let pio_bitmap = get_pio_bitmap(this_zone_id());
             VmcsControl64::IO_BITMAP_A_ADDR.write(pio_bitmap.a.start_paddr() as _)?;
             VmcsControl64::IO_BITMAP_B_ADDR.write(pio_bitmap.b.start_paddr() as _)?;
@@ -535,7 +542,7 @@ impl ArchCpu {
         VmcsGuest64::IA32_EFER.write(0)?;
 
         // for AP start up, set CS_BASE to entry address, and RIP to 0.
-        if self.power_on && !this_cpu_data().boot_cpu {
+        if this_cpu_data().vcpu_state.is_running() && !this_cpu_data().boot_cpu {
             VmcsGuestNW::RIP.write(0)?;
             VmcsGuestNW::CS_BASE.write(entry)?;
         }
@@ -582,7 +589,7 @@ impl ArchCpu {
 
     fn vmexit_handler(&mut self) {
         crate::arch::trap::handle_vmexit(self).unwrap();
-        if (self.power_on) {
+        if this_cpu_data().vcpu_state.is_running() {
             check_pending_vectors(self.cpuid);
         }
     }

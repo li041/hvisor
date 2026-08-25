@@ -69,11 +69,11 @@ mod tests;
 use crate::arch::mm::{arch_post_heap_init, arch_setup_parange};
 use crate::consts::{hv_end, mem_pool_start, MAX_CPU_NUM};
 use crate::device::iommu::iommu_init;
-use arch::{cpu::cpu_start, entry::arch_entry};
+use arch::{arch_config_by_args, cpu::cpu_start, entry::arch_entry};
 use config::root_zone_config;
 use core::sync::atomic::{AtomicI32, AtomicU32, Ordering};
 use cpu_data::PerCpu;
-#[cfg(feature = "pci")]
+#[cfg(all(pci, not(pci_init_delay)))]
 use pci::pci_config::hvisor_pci_init;
 
 static INITED_CPUS: AtomicU32 = AtomicU32::new(0);
@@ -132,12 +132,12 @@ fn primary_init_early() {
 
     device::irqchip::primary_init_early();
 
-    #[cfg(feature = "iommu")]
+    #[cfg(iommu)]
     iommu_init();
 
     let root_config = root_zone_config();
 
-    #[cfg(feature = "pci")]
+    #[cfg(all(pci, not(pci_init_delay)))]
     if root_config.num_pci_bus > 0 {
         let num_pci_bus = root_config.num_pci_bus as usize;
         let _ = hvisor_pci_init(&root_config.pci_config[..num_pci_bus]);
@@ -231,6 +231,7 @@ fn rust_main(cpuid: usize, host_dtb: usize) {
 
     if is_primary {
         primary_init_early(); // create root zone here
+        arch_config_by_args(cpuid, host_dtb);
     } else {
         wait_for_counter(&INIT_EARLY_OK, 1);
     }

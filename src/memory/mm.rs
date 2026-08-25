@@ -93,6 +93,28 @@ where
         self.pt.root_paddr()
     }
 
+    /// Check whether `[start, start+size)` overlaps with any region in this MemorySet.
+    pub fn is_range_overlap(&self, start: usize, size: usize) -> bool
+    where
+        PT::VA: From<usize>,
+    {
+        let end = start + size;
+        let va_start: PT::VA = start.into();
+        if let Some((_, before)) = self.regions.range(..va_start).last() {
+            let before_end: usize = before.start.into() + before.size;
+            if before_end > start {
+                return true;
+            }
+        }
+        if let Some((_, after)) = self.regions.range(va_start..).next() {
+            let after_start: usize = after.start.into();
+            if after_start < end {
+                return true;
+            }
+        }
+        false
+    }
+
     fn test_free_area(&self, other: &MemoryRegion<PT::VA>) -> bool {
         if let Some((_, before)) = self.regions.range(..other.start).last() {
             if before.is_overlap_with(other) {
@@ -163,6 +185,20 @@ where
 
         self.insert(region)?;
         Ok(())
+    }
+
+    /// Get the memory region which contains the `start` address.
+    pub fn get_region(&self, start: PT::VA) -> Option<MemoryRegion<PT::VA>> {
+        // Find a region that completely includes the range [start, end)
+        for (key, region) in self.regions.range(..=start) {
+            let region_start = *key;
+            let region_end = region_start.into() + region.size;
+            // Return the region contains the start address
+            if region_start <= start && region_end > start.into() {
+                return Some(region.clone());
+            }
+        }
+        None
     }
 
     /// Find and remove memory region which starts from `start` and `size`

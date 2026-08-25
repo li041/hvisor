@@ -15,17 +15,16 @@
 //      Jingyu Liu <liujingyu24s@ict.ac.cn>
 //
 use crate::consts::IPI_EVENT_SEND_IPI;
-#[cfg(feature = "plic")]
+#[cfg(plic)]
 use crate::consts::IPI_EVENT_UPDATE_HART_LINE;
 use crate::platform::BOARD_HARTID_MAP;
 
-// arch_send_event
 pub fn arch_send_event(cpu_id: u64, _sgi_num: u64) {
     let hart_id = BOARD_HARTID_MAP[cpu_id as usize];
     debug!("arch_send_event: cpu_id: {}", hart_id);
-    #[cfg(feature = "aclint")]
+    #[cfg(aclint)]
     crate::device::irqchip::aclint::aclint_send_ipi(hart_id as usize);
-    #[cfg(not(feature = "aclint"))]
+    #[cfg(not(aclint))]
     {
         let sbi_ret: sbi_rt::SbiRet =
             sbi_rt::send_ipi(sbi_rt::HartMask::from_mask_base(1 << hart_id, 0));
@@ -33,6 +32,10 @@ pub fn arch_send_event(cpu_id: u64, _sgi_num: u64) {
             error!("arch_send_event: send_ipi failed: {:?}", sbi_ret);
         }
     }
+}
+
+pub fn arch_notify_event(cpu_id: u64, sgi_num: u64, _event_id: usize, _queue_was_empty: bool) {
+    arch_send_event(cpu_id, sgi_num);
 }
 
 /// Handle send_ipi event.
@@ -44,7 +47,7 @@ pub fn arch_ipi_handler() {
 
 pub fn arch_check_events(event: Option<usize>) {
     match event {
-        #[cfg(feature = "plic")]
+        #[cfg(plic)]
         Some(IPI_EVENT_UPDATE_HART_LINE) => {
             use crate::device::irqchip::plic::update_hart_line;
             update_hart_line();
@@ -57,8 +60,4 @@ pub fn arch_check_events(event: Option<usize>) {
             panic!("arch_check_events: unhandled event: {:?}", event);
         }
     }
-}
-
-pub fn arch_prepare_send_event(_cpu_id: usize, _ipi_int_id: usize, _event_id: usize) {
-    debug!("risc-v arch_prepare_send_event: do nothing now.")
 }

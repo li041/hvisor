@@ -38,7 +38,24 @@ impl Write for Stdout {
     }
 }
 
+// The number of checks for UART console availability when sequential output is enabled.
+// Tips: this may cause a long delay when the console is busy, so it should be set to a small value,
+//       and the default value is 3000, which is enough for most cases.
+pub const CHECK_NUM: u64 = 3000;
 pub fn print(args: fmt::Arguments) {
+    #[cfg(sequential_output)]
+    {
+        let mut flag = false;
+        while !flag {
+            flag = true;
+            for _i in 1..CHECK_NUM {
+                if !uart::console_free_check() {
+                    flag = false;
+                    break;
+                }
+            }
+        }
+    }
     let _locked = PRINT_LOCK.lock();
     Stdout.write_fmt(args).unwrap();
 }
@@ -133,7 +150,7 @@ pub fn init() {
 struct SimpleLogger;
 
 impl SimpleLogger {
-    #[cfg(feature = "graphics")]
+    #[cfg(graphics)]
     fn print(
         &self,
         level: Level,
@@ -154,7 +171,7 @@ impl SimpleLogger {
         );
     }
 
-    #[cfg(not(feature = "graphics"))]
+    #[cfg(not(graphics))]
     fn print(
         &self,
         level: Level,
@@ -165,7 +182,7 @@ impl SimpleLogger {
         args_color: ColorCode,
         record: &Record,
     ) {
-        #[cfg(feature = "print_timestamp")]
+        #[cfg(print_timestamp)]
         {
             let time_us: u64 = crate::arch::time::get_time_us();
             let sec = time_us / 1_000_000;
@@ -180,7 +197,7 @@ impl SimpleLogger {
                 with_color!(args_color, "{}", record.args()),
             ));
         }
-        #[cfg(not(feature = "print_timestamp"))]
+        #[cfg(not(print_timestamp))]
         print(with_color!(
             ColorCode::White,
             "[{} {}] {} {}\n",

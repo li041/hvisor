@@ -73,6 +73,9 @@ impl FrameAllocator {
         frame_count: usize,
         align_log2: usize,
     ) -> Option<PhysAddr> {
+        if frame_count == 0 || align_log2 >= usize::BITS as usize {
+            return None;
+        }
         let ret = self
             .inner
             .alloc_contiguous(frame_count, align_log2)
@@ -84,6 +87,66 @@ impl FrameAllocator {
             ret
         );
         ret
+    }
+
+    /// Allocate contiguous frames whose physical page number has its lower
+    /// `align_log2` bits cleared.
+    ///
+    /// # Safety
+    ///
+    /// This function is unsafe because you need to deallocate manually.
+    unsafe fn alloc_contiguous_with_base(
+        &mut self,
+        frame_count: usize,
+        align_log2: usize,
+    ) -> Option<PhysAddr> {
+        if frame_count == 0 || align_log2 >= usize::BITS as usize {
+            return None;
+        }
+
+        let align_pages = 1usize << align_log2;
+        let align_mask = align_pages - 1;
+        let base_page = self.base / PAGE_SIZE;
+        let mut start = 0;
+
+        while start < FrameAlloc::CAP {
+            // Only an aligned physical page can start a candidate range.
+            let start_page = base_page.checked_add(start)?;
+            if start_page & align_mask != 0 {
+                start += 1;
+                continue;
+            }
+
+            // Count consecutive free frames from the aligned start index.
+            let mut idx = start;
+            loop {
+                match self.inner.next(idx) {
+                    Some(next) if next == idx => {
+                        idx += 1;
+                        // Allocate immediately once enough consecutive frames are found.
+                        if idx - start == frame_count {
+                            let start_paddr =
+                                start.checked_mul(PAGE_SIZE)?.checked_add(self.base)?;
+                            self.inner.remove(start..idx);
+                            trace!(
+                                "Allocate {} frames with physical alignment {} pages: {:x}",
+                                frame_count,
+                                align_pages,
+                                start_paddr
+                            );
+                            return Some(start_paddr);
+                        }
+                    }
+                    Some(next) => {
+                        // Skip the allocated gap and try the next free frame.
+                        start = next;
+                        break;
+                    }
+                    None => return None,
+                }
+            }
+        }
+        None
     }
 
     /// # Safety
@@ -143,36 +206,18 @@ impl Frame {
         }
     }
 
-    /// allocate contigugous frames, and you can specify the alignment, set the lower `align_log2` bits to 0.
+    /// Allocate contiguous frames whose physical page number has its lower
+    /// `align_log2` bits cleared.
     pub fn new_contiguous_with_base(frame_count: usize, align_log2: usize) -> HvResult<Self> {
-        let align_mask = (1 << align_log2) - 1;
-        // Create a vector to keep track of attempted frames
-        let mut attempted_frames = Vec::new();
-        loop {
-            if let Ok(frame) = Frame::new_contiguous(frame_count, 0) {
-                if frame.start_paddr() & align_mask == 0 {
-                    // info!(
-                    //     "new contiguous success!!! start_paddr:0x{:x}",
-                    //     frame.start_paddr()
-                    // );
-                    return Ok(frame);
-                } else {
-                    let start_paddr = frame.start_paddr();
-                    let next_aligned_addr = (start_paddr + align_mask) & !align_mask;
-                    let temp_frame_count = (next_aligned_addr - start_paddr) / PAGE_SIZE;
-                    drop(frame);
-                    attempted_frames.push(Frame::new_contiguous(temp_frame_count, 0));
-                    if let Ok(frame) = Frame::new_contiguous(frame_count, 0) {
-                        // info!(
-                        //     "new contiguous success!!! start_paddr:0x{:x}",
-                        //     frame.start_paddr()
-                        // );
-                        return Ok(frame);
-                    }
-                }
-            } else {
-                return Err(hv_err!(ENOMEM));
-            }
+        unsafe {
+            FRAME_ALLOCATOR
+                .lock()
+                .alloc_contiguous_with_base(frame_count, align_log2)
+                .map(|start_paddr| Self {
+                    start_paddr,
+                    frame_count,
+                })
+                .ok_or(hv_err!(ENOMEM))
         }
     }
 
@@ -188,23 +233,6 @@ impl Frame {
             start_paddr,
             frame_count: 0,
         }
-    }
-
-    pub fn new_16() -> HvResult<Self> {
-        let mut v: Vec<Frame> = Vec::new();
-        loop {
-            let f = Self::new_zero()?;
-            if f.start_paddr & 0b11_1111_1111_1111 == 0 {
-                v.push(f);
-                break;
-            }
-            v.push(f);
-        }
-        let f_16 = v.pop().unwrap();
-        drop(f_16);
-        let ret = Self::new_contiguous(4, 0)?;
-        drop(v);
-        Ok(ret)
     }
 
     /// Get the start physical address of this frame.
@@ -289,6 +317,8 @@ pub fn init() {
 }
 
 pub fn test() {
+    const ALIGN_16K: usize = 16 * 1024;
+
     let mut v: Vec<Frame> = Vec::new();
     for _ in 0..5 {
         let frame = Frame::new().unwrap();
@@ -302,5 +332,10 @@ pub fn test() {
         v.push(frame);
     }
     drop(v);
+
+    let frame = Frame::new_contiguous_with_base(ALIGN_16K / PAGE_SIZE, 2).unwrap();
+    assert_eq!(frame.start_paddr() % ALIGN_16K, 0);
+    assert_eq!(frame.size(), ALIGN_16K);
+
     info!("frame_allocator_test passed!");
 }

@@ -17,17 +17,24 @@
 #![allow(unreachable_patterns)]
 
 use crate::arch::cpu::get_target_cpu;
-use crate::config::HvZoneConfig;
-use crate::consts::{INVALID_ADDRESS, MAX_CPU_NUM, MAX_WAIT_TIMES, PAGE_SIZE};
-use crate::cpu_data::{get_cpu_data, PerCpu};
-use crate::device::virtio_trampoline::{MAX_DEVS, VIRTIO_BRIDGE, VIRTIO_IRQS};
+use crate::config::{HvZoneBootMode, HvZoneConfig};
+use crate::consts::{INVALID_ADDRESS, MAX_WAIT_TIMES, PAGE_SIZE};
+use crate::cpu_data::{get_cpu_data, PerCpu, VcpuState};
+use crate::device::virtio_trampoline::{
+    VirtioPCIHypercallOp, VIRTIO_BRIDGE, VIRTIO_PCI_BRIDGE, VIRTIO_PCI_HYPERCALL_VERSION,
+};
+#[cfg(not(target_arch = "loongarch64"))]
+use crate::device::virtio_trampoline::{MAX_DEVS, VIRTIO_IRQS};
 use crate::error::HvResult;
 use crate::pci::pci_config::GLOBAL_PCIE_LIST;
 use crate::zone::{
-    add_zone, all_zones_info, find_zone, is_this_root_zone, remove_zone, zone_create, ZoneInfo,
+    add_zone, all_zones_info, clear_zone_boot_mode, find_zone, is_this_root_zone, remove_zone,
+    set_zone_boot_mode, zone_create, ZoneInfo,
 };
 
-use crate::event::{send_event, IPI_EVENT_SHUTDOWN, IPI_EVENT_VIRTIO_INJECT_IRQ, IPI_EVENT_WAKEUP};
+#[cfg(not(target_arch = "loongarch64"))]
+use crate::event::IPI_EVENT_VIRTIO_INJECT_IRQ;
+use crate::event::{send_event, IPI_EVENT_SHUTDOWN, IPI_EVENT_VIRTIO_PCI_DONE, IPI_EVENT_WAKEUP};
 use core::convert::TryFrom;
 use numeric_enum_macro::numeric_enum;
 
@@ -41,11 +48,17 @@ numeric_enum! {
         HvZoneStart = 2,
         HvZoneShutdown = 3,
         HvZoneList = 4,
-        HvClearInjectIrq = 20,
+        HvClearInjectIrq = 11,
         HvIvcInfo = 5,
         HvConfigCheck = 6,
+        HvVirtioPCI = 7,
+        HvZoneSetBootMode = 8,
+        HvGetEcamBase = 9,
     }
 }
+#[cfg(target_arch = "loongarch64")]
+pub const SGI_IPI_ID: u64 = crate::arch::ipi::HVISOR_EVENT_DOORBELL as u64;
+#[cfg(not(target_arch = "loongarch64"))]
 pub const SGI_IPI_ID: u64 = 7;
 
 pub type HyperCallResult = HvResult<usize>;
@@ -82,18 +95,13 @@ impl<'a> HyperCall<'a> {
                 HyperCallCode::HvZoneShutdown => self.hv_zone_shutdown(arg0),
                 HyperCallCode::HvZoneList => self.hv_zone_list(&mut *(arg0 as *mut ZoneInfo), arg1),
                 HyperCallCode::HvClearInjectIrq => {
-                    use crate::consts::IPI_EVENT_CLEAR_INJECT_IRQ;
-                    for i in 1..MAX_CPU_NUM {
-                        // if target cpu status is not running, we skip it
-                        if !get_cpu_data(i).arch_cpu.power_on {
-                            continue;
-                        }
-                        send_event(i, SGI_IPI_ID as _, IPI_EVENT_CLEAR_INJECT_IRQ);
-                    }
-                    HyperCallResult::Ok(0)
+                    self.hv_virtio_deassert_irq(arg0 as usize, arg1 as usize)
                 }
                 HyperCallCode::HvIvcInfo => self.hv_ivc_info(arg0),
                 HyperCallCode::HvConfigCheck => self.hv_zone_config_check(arg0 as *mut u64),
+                HyperCallCode::HvVirtioPCI => self.hv_virtio_pci(arg0, arg1),
+                HyperCallCode::HvZoneSetBootMode => self.hv_zone_set_boot_mode(arg0, arg1),
+                HyperCallCode::HvGetEcamBase => self.hv_get_ecam_base(arg0 as *mut u64),
                 _ => {
                     warn!("hypercall id={} unsupported!", code as u64);
                     Ok(0)
@@ -111,9 +119,7 @@ impl<'a> HyperCall<'a> {
         if !is_this_root_zone() {
             return hv_result_err!(EPERM, "Init virtio over non-root zones: unsupported!");
         }
-
         let shared_region_addr_pa = self.hv_get_real_pa(shared_region_addr) as usize;
-
         assert!(shared_region_addr_pa % PAGE_SIZE == 0);
         // let offset = shared_region_addr_pa & (PAGE_SIZE - 1);
         // memory::hv_page_table()
@@ -141,6 +147,7 @@ impl<'a> HyperCall<'a> {
             );
         }
         let mut res_agent = VIRTIO_BRIDGE.res_agent();
+        #[cfg(not(target_arch = "loongarch64"))]
         let mut map_irq = VIRTIO_IRQS.lock();
         while !res_agent.is_empty() {
             let (_res_front, irq_id, target_zone) = res_agent.peek_front();
@@ -152,25 +159,108 @@ impl<'a> HyperCall<'a> {
                 }
             };
 
-            let irq_list = map_irq.entry(target_cpu).or_insert([0; MAX_DEVS + 1]);
-
-            self.wait_for_interrupt(irq_list);
-            if !irq_list[1..=irq_list[0] as usize].contains(&irq_id) {
-                let len = irq_list[0] as usize;
-                assert!(len + 1 < MAX_DEVS);
-                irq_list[len + 1] = irq_id;
-                irq_list[0] += 1;
-                send_event(
-                    target_cpu as _,
-                    SGI_IPI_ID as _,
-                    IPI_EVENT_VIRTIO_INJECT_IRQ,
+            #[cfg(target_arch = "loongarch64")]
+            {
+                crate::device::irqchip::ls7a2000::set_guest_irq_line(
+                    target_cpu,
+                    irq_id as usize,
+                    true,
                 );
+                res_agent.advance_front();
+                continue;
             }
 
+            #[cfg(not(target_arch = "loongarch64"))]
+            {
+                let irq_list = map_irq.entry(target_cpu).or_insert([0; MAX_DEVS + 1]);
+                self.wait_for_interrupt(irq_list);
+                if !irq_list[1..=irq_list[0] as usize].contains(&irq_id) {
+                    let len = irq_list[0] as usize;
+                    assert!(len + 1 < MAX_DEVS);
+                    irq_list[len + 1] = irq_id;
+                    irq_list[0] += 1;
+                    send_event(
+                        target_cpu as _,
+                        SGI_IPI_ID as _,
+                        IPI_EVENT_VIRTIO_INJECT_IRQ,
+                    );
+                }
+            }
+
+            #[cfg(not(target_arch = "loongarch64"))]
             res_agent.advance_front();
         }
         drop(res_agent);
         HyperCallResult::Ok(0)
+    }
+
+    pub fn hv_zone_set_boot_mode(
+        &mut self,
+        boot_mode_ipa: u64,
+        boot_mode_size: u64,
+    ) -> HyperCallResult {
+        if !is_this_root_zone() {
+            return hv_result_err!(
+                EPERM,
+                "Set zone boot mode over non-root zones: unsupported!"
+            );
+        }
+        if boot_mode_size != core::mem::size_of::<HvZoneBootMode>() as _ {
+            return hv_result_err!(
+                EINVAL,
+                format!(
+                    "hv_zone_set_boot_mode: config size should be {} bytes, but got {}",
+                    core::mem::size_of::<HvZoneBootMode>(),
+                    boot_mode_size
+                )
+            );
+        }
+
+        let boot_mode_pa = self.hv_get_real_pa(boot_mode_ipa);
+        let boot_mode = unsafe { &*(boot_mode_pa as *const HvZoneBootMode) };
+        if boot_mode.zone_id == 0 {
+            return hv_result_err!(EINVAL, "boot mode is not supported for the root zone");
+        }
+
+        set_zone_boot_mode(boot_mode.zone_id as usize, *boot_mode);
+        info!(
+            "hv_zone_set_boot_mode: zone_id={}, multiboot_enabled={}, info_paddr={:#x}",
+            boot_mode.zone_id, boot_mode.multiboot_enabled, boot_mode.multiboot_info_paddr
+        );
+        HyperCallResult::Ok(0)
+    }
+
+    fn hv_virtio_deassert_irq(&mut self, target_zone: usize, irq_id: usize) -> HyperCallResult {
+        if !is_this_root_zone() {
+            return hv_result_err!(
+                EPERM,
+                "Virtio deassert operation over non-root zones: unsupported!"
+            );
+        }
+        if find_zone(target_zone).is_none() {
+            return hv_result_err!(EINVAL, format!("zone {} does not exist", target_zone));
+        }
+
+        let target_cpu = get_target_cpu(irq_id, target_zone);
+        #[cfg(target_arch = "loongarch64")]
+        {
+            if !crate::device::irqchip::ls7a2000::set_guest_irq_line(target_cpu, irq_id, false) {
+                return hv_result_err!(
+                    EINVAL,
+                    format!(
+                        "invalid LoongArch guest HWI {} for zone {}",
+                        irq_id, target_zone
+                    )
+                );
+            }
+            return HyperCallResult::Ok(0);
+        }
+
+        #[cfg(not(target_arch = "loongarch64"))]
+        hv_result_err!(
+            ENOSYS,
+            "per-IRQ Virtio deassert is not implemented on this architecture"
+        )
     }
 
     pub fn hv_zone_start(&mut self, config: &HvZoneConfig, config_size: u64) -> HyperCallResult {
@@ -178,7 +268,7 @@ impl<'a> HyperCall<'a> {
         let config_pa = self.hv_get_real_pa(config_ipa);
         let config = unsafe { &*(config_pa as *const HvZoneConfig) };
 
-        debug!("hv_zone_start: config: {:#x?}", config);
+        info!("hv_zone_start: config: {:#x?},pa:{:#x}", config, config_pa);
         if !is_this_root_zone() {
             return hv_result_err!(
                 EPERM,
@@ -195,20 +285,22 @@ impl<'a> HyperCall<'a> {
                 )
             );
         }
-        let zone = zone_create(config)?;
+        let zone_result = zone_create(config);
+        clear_zone_boot_mode(config.zone_id as usize);
+        let zone = zone_result?;
         let boot_cpu = zone.read().cpu_set().first_cpu().unwrap();
 
         let target_data = get_cpu_data(boot_cpu as _);
         let _lock = target_data.ctrl_lock.lock();
 
-        if !target_data.arch_cpu.power_on {
+        if target_data.vcpu_state.is_stopped() {
             info!("boot_cpu: {}", boot_cpu);
+            target_data.vcpu_state.store(VcpuState::Ready);
             send_event(boot_cpu, SGI_IPI_ID as _, IPI_EVENT_WAKEUP);
         } else {
             error!("hv_zone_start: cpu {} already on", boot_cpu);
             return hv_result_err!(EBUSY);
         };
-        self.check_cpu_id();
         add_zone(zone);
         drop(_lock);
         HyperCallResult::Ok(0)
@@ -226,6 +318,7 @@ impl<'a> HyperCall<'a> {
             return hv_result_err!(EINVAL);
         }
         // avoid virtio daemon send sgi to the shutdowning zone
+        #[cfg(not(target_arch = "loongarch64"))]
         let mut map_irq = VIRTIO_IRQS.lock();
 
         let zone = match find_zone(zone_id as _) {
@@ -242,8 +335,11 @@ impl<'a> HyperCall<'a> {
         zone_w.cpu_set().iter().for_each(|cpu_id| {
             let _lock = get_cpu_data(cpu_id).ctrl_lock.lock();
             get_cpu_data(cpu_id).cpu_on_entry = INVALID_ADDRESS;
+            #[cfg(target_arch = "loongarch64")]
+            crate::device::irqchip::ls7a2000::clear_guest_irq_lines(cpu_id);
             send_event(cpu_id, SGI_IPI_ID as _, IPI_EVENT_SHUTDOWN);
             // set the virtio irq list's len to 0
+            #[cfg(not(target_arch = "loongarch64"))]
             if let Some(irq_list) = map_irq.get_mut(&cpu_id) {
                 irq_list[0] = 0;
             }
@@ -251,18 +347,18 @@ impl<'a> HyperCall<'a> {
 
         let mut count: usize = 0;
 
-        // wait all zone's cpus shutdown
+        // wait all zone's cpus shutdown (Stopped only: includes Blocked / Ready / Running)
         while zone_w.cpu_set().iter().any(|cpu_id| {
             let _lock = get_cpu_data(cpu_id).ctrl_lock.lock();
-            let power_on = get_cpu_data(cpu_id).arch_cpu.power_on;
+            let not_stopped = !get_cpu_data(cpu_id).vcpu_state.is_stopped();
             count += 1;
             if count > MAX_WAIT_TIMES {
-                if power_on {
+                if not_stopped {
                     error!("cpu {} cannot be shut down", cpu_id);
                     return false;
                 }
             }
-            power_on
+            not_stopped
         }) {}
 
         zone_w.cpu_set().iter().for_each(|cpu_id| {
@@ -272,6 +368,10 @@ impl<'a> HyperCall<'a> {
 
         drop(zone_w);
         zone.arch_irqchip_reset();
+
+        // Remove viommu instance related to this zone.
+        #[cfg(viommu)]
+        crate::device::iommu::viommu_remove(zone_id as usize);
         drop(zone);
 
         // Reset zone_id for all devices allocated to this zone
@@ -315,5 +415,82 @@ impl<'a> HyperCall<'a> {
         }
 
         HyperCallResult::Ok(core::cmp::min(cnt as _, zones_info.len()))
+    }
+
+    fn hv_virtio_pci(&mut self, arg0: u64, arg1: u64) -> HyperCallResult {
+        const VIRTIO_PCI_INIT: u64 = 0;
+        const VIRTIO_PCI_DOORBELL: u64 = 1;
+
+        if !is_this_root_zone() {
+            return hv_result_err!(
+                EPERM,
+                "Virtio PCI operation over non-root zones: unsupported!"
+            );
+        }
+
+        match arg0 {
+            VIRTIO_PCI_INIT => {
+                let shared_pci_region_addr_pa = self.hv_get_real_pa(arg1) as usize;
+                assert!(shared_pci_region_addr_pa % PAGE_SIZE == 0);
+                let mut bridge = VIRTIO_PCI_BRIDGE.lock();
+                bridge.init(shared_pci_region_addr_pa);
+                let info = bridge.hypercall_info();
+                if info.version != VIRTIO_PCI_HYPERCALL_VERSION {
+                    return hv_result_err!(
+                        EINVAL,
+                        format!(
+                            "Virtio PCI hypercall version mismatch: expect {}, got {}",
+                            VIRTIO_PCI_HYPERCALL_VERSION, info.version
+                        )
+                    );
+                }
+                HyperCallResult::Ok(0)
+            }
+            VIRTIO_PCI_DOORBELL => {
+                let bridge = VIRTIO_PCI_BRIDGE.lock();
+                let info = bridge.hypercall_info();
+                if info.version != VIRTIO_PCI_HYPERCALL_VERSION {
+                    return hv_result_err!(
+                        EINVAL,
+                        format!(
+                            "Virtio PCI hypercall version mismatch: expect {}, got {}",
+                            VIRTIO_PCI_HYPERCALL_VERSION, info.version
+                        )
+                    );
+                }
+
+                let op = VirtioPCIHypercallOp::try_from(info.op).map_err(|_| {
+                    hv_err!(
+                        EINVAL,
+                        format!("Unknown virtio pci hypercall op {}", info.op)
+                    )
+                })?;
+
+                match op {
+                    VirtioPCIHypercallOp::None | VirtioPCIHypercallOp::ConfigReqComplete => {
+                        HyperCallResult::Ok(0)
+                    }
+                    VirtioPCIHypercallOp::DataReqComplete => {
+                        send_event(
+                            info.target_cpu as usize,
+                            SGI_IPI_ID as usize,
+                            IPI_EVENT_VIRTIO_PCI_DONE,
+                        );
+                        HyperCallResult::Ok(0)
+                    }
+                    VirtioPCIHypercallOp::Reset => {
+                        drop(bridge);
+                        VIRTIO_PCI_BRIDGE.lock().write_hypercall_info(
+                            crate::device::virtio_trampoline::VirtioPCIHypercallInfo::new(),
+                        );
+                        HyperCallResult::Ok(0)
+                    }
+                }
+            }
+            _ => hv_result_err!(
+                EINVAL,
+                format!("Unknown virtio pci hypercall mode {}", arg0)
+            ),
+        }
     }
 }

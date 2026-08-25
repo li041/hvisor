@@ -25,7 +25,7 @@ use super::{
     pci_struct::{Bdf, VirtualPciConfigSpace, CONFIG_LENTH},
 };
 
-#[cfg(feature = "ecam_pcie")]
+#[cfg(ecam_pcie)]
 use super::{mem_alloc::BaseAllocator, pci_struct::RootComplex};
 
 use crate::{
@@ -40,7 +40,7 @@ pub static GLOBAL_PCIE_LIST_TEST: Lazy<Mutex<BTreeMap<Bdf, VirtualPciConfigSpace
         Mutex::new(m)
     });
 
-#[cfg(feature = "ecam_pcie")]
+#[cfg(ecam_pcie)]
 pub fn pcie_test() {
     warn!("pcie test");
     let mut allocator = BaseAllocator::default();
@@ -78,7 +78,7 @@ pub fn pcie_guest_init() {
         // let _ = dev.write_hw(0x24, 4, 0xffffffff);
         // let value2 = dev.read_hw(0x24, 4).unwrap();
         // info!("{:#?} bar64 {:x}, {:x}", bdf, (value1 as u64), ((value2 as u64) << 32u64));
-        dev.set_vbdf(vbdf);
+        dev.set_vbdf(vbdf, 0xff);
         vbus.insert(vbdf, dev);
     } else {
         warn!("can not find dev");
@@ -87,7 +87,7 @@ pub fn pcie_guest_init() {
     let vbdf = Bdf::from_str("0000:00:02.0").unwrap();
     let bdf = Bdf::from_str("0000:00:02.0").unwrap();
     if let Some(mut dev) = guard.remove(&bdf) {
-        dev.set_vbdf(vbdf);
+        dev.set_vbdf(vbdf, 0xff);
         vbus.insert(vbdf, dev);
     } else {
         warn!("can not find dev");
@@ -96,7 +96,7 @@ pub fn pcie_guest_init() {
     let vbdf = Bdf::from_str("0000:00:03.0").unwrap();
     let bdf = Bdf::from_str("0000:00:03.0").unwrap();
     if let Some(mut dev) = guard.remove(&bdf) {
-        dev.set_vbdf(vbdf);
+        dev.set_vbdf(vbdf, 0xff);
         vbus.insert(vbdf, dev);
     } else {
         warn!("can not find dev");

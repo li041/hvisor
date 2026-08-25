@@ -47,9 +47,9 @@ pub const ROOT_ZONE_NAME: &str = "root-linux";
 pub const ROOT_ZONE_MEMORY_REGIONS: &[HvConfigMemoryRegion] = &[
     HvConfigMemoryRegion {
         mem_type: MEM_TYPE_RAM,
-        physical_start: 0x83000000,
-        virtual_start: 0x83000000,
-        size: 0x7D000000,
+        physical_start: 0x84600000,
+        virtual_start: 0x84600000,
+        size: 0x7BA00000,
     }, // ram
     HvConfigMemoryRegion {
         mem_type: MEM_TYPE_IO,
@@ -104,8 +104,8 @@ pub const ROOT_PCI_CONFIG: [HvPciConfig; 1] = [HvPciConfig {
 pub const ROOT_ZONE_IVC_CONFIG: &[HvIvcConfig] = &[];
 
 pub const ROOT_PCI_DEVS: &[HvPciDevConfig] = &[
-    pci_dev!(0x0, 0x0, 0x0, 0x0, VpciDevType::Physical),
-    pci_dev!(0x0, 0x0, 0x1, 0x0, VpciDevType::Physical),
-    // pci_dev!(0x0, 0x0, 0x3, 0x0, VpciDevType::Physical),
-    // pci_dev!(0x0, 0x0, 0x5, 0x0, VpciDevType::StandardVdev),
+    pci_dev!(0x0, 0x0, 0x0, 0x0 => 0x0, 0x0, 0x0, VpciDevType::Physical),
+    pci_dev!(0x0, 0x0, 0x1, 0x0 => 0x0, 0x1, 0x0, VpciDevType::Physical),
+    // pci_dev!(0x0, 0x0, 0x3, 0x0 => 0x0, 0x3, 0x0, VpciDevType::Physical),
+    // pci_dev!(0x0, 0x0, 0x5, 0x0 => 0x0, 0x5, 0x0, VpciDevType::StandardVdev),
 ];

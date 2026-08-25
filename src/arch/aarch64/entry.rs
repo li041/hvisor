@@ -14,7 +14,7 @@
 // Authors:
 //
 use crate::consts::PER_CPU_SIZE;
-use crate::platform::BOARD_MPIDR_MAPPINGS;
+use crate::platform::{BOARD_EARLY_CACHE_INVALIDATE_MASKS, BOARD_MPIDR_MAPPINGS};
 
 const INVALID_CPUID: usize = (-1) as _;
 
@@ -25,8 +25,9 @@ pub unsafe extern "C" fn arch_entry() -> ! {
     unsafe {
         core::arch::asm!(
             "
-            // x0 = dtbaddr
-            mov x18, x0
+            // `arch_entry` receives dtbaddr in `x0`. Keep it in `x20` until `rust_main`.
+            // Note: Only callee-saved registers (x19-x28) are guaranteed to be preserved across function calls.
+            mov x20, x0
 
             /* Insert nop instruction to ensure byte at offset 10 in hvisor binary is non-zero.
             * Rockchip U-Boot (arch_preboot_os@arch/arm/mach-rockchip/board.c:670) performs 
@@ -36,7 +37,8 @@ pub unsafe extern "C" fn arch_entry() -> ! {
 
             nop
             nop
-            bl {boot_cpuid_get}        // x17 = cpuid
+            // boot_cpuid_get returns the logical cpuid in `x19`.
+            bl {boot_cpuid_get}
 
             adrp x2, __core_end        // x2 = &__core_end
             mov x3, {per_cpu_size}     // x3 = per_cpu_size
@@ -47,36 +49,65 @@ pub unsafe extern "C" fn arch_entry() -> ! {
             // disable cache and MMU
             mrs x1, sctlr_el2
             bic x1, x1, #0xf
-            msr sctlr_el2, x1
+            msr sctlr_el2, x1           //  SCTLR_EL2 &= ~0xf;
+            isb
+
+            // clear i-cache and sync
+            dsb sy
+            ic  iallu
+            isb
+
+            // flush tlb
+            tlbi alle2is
+
+            // per-cpu mask bits: bit0->L1(D), bit1->L2, bit2->L3.
+            adrp x9, {cache_inv_masks}             // Get Symbol Table Page Address
+            add  x9, x9, :lo12:{cache_inv_masks}   // Get Symbol Table Page Offset
+            lsl  x10, x19, #3
+            add x9, x9, x10
+            ldr x9, [x9]
 
             // cache_invalidate(0): clear dl1$
+            tbz x9, #0, 20f
             mov x0, #0
             bl  {cache_invalidate}
 
-            ic  iallu
-
-            cmp x19, 0
-            b.ne 1f
-
-            // if (cpu_id == 0) cache_invalidate(2): clear l2$
+        20:
+            // cache_invalidate(2): clear l2$
+            tbz x9, #1, 21f
             mov x0, #2
             bl  {cache_invalidate}
 
-            // ic  iallu
+        21:
+            // cache_invalidate(4): clear l3$
+            tbz x9, #2, 22f
+            mov x0, #4
+            bl  {cache_invalidate}
+
+        22:
+            // clear i-cache and sync
+            dsb sy
+            ic  iallu
+            isb
+
+            // if cpuid == 0, clear bss and init boot page table.
+            cmp x19, 0
+            b.ne 1f
 
             bl {clear_bss}
             bl {boot_pt_init}
         1:
             bl {mmu_enable}
 
-            mov x1, x18
+            mov x1, x20
             mov x0, x19
-            mov x18, #0
+            mov x20, #0
             mov x19, #0
             bl {rust_main}            // x0 = cpuid, x1 = dtbaddr
             ",
             options(noreturn),
             boot_cpuid_get = sym boot_cpuid_get,
+            cache_inv_masks = sym BOARD_EARLY_CACHE_INVALIDATE_MASKS,
             cache_invalidate = sym cache_invalidate,
             per_cpu_size = const PER_CPU_SIZE,
             rust_main = sym crate::rust_main,
@@ -94,6 +125,7 @@ pub unsafe extern "C" fn boot_cpuid_get() {
 
     core::arch::asm!(
         "
+        // Return convention for `arch_entry`: leave the logical cpuid in x19.
         mrs x19, mpidr_el1
         ldr x2, ={mpidr_mask}
         and x19, x19, x2
@@ -177,6 +209,7 @@ unsafe extern "C" fn cache_invalidate(cache_level: usize) {
     core::arch::asm!(
         r#"
         msr csselr_el1, {0}
+        isb
         mrs x4, ccsidr_el1 // read cache size id.
         and x1, x4, #0x7
         add x1, x1, #0x4 // x1 = cache line size.
@@ -202,6 +235,7 @@ unsafe extern "C" fn cache_invalidate(cache_level: usize) {
         add x5, x5, #1 // else, next way.
         cmp x5, x3 // last way reached yet?
         ble 1b // if not, iterate way_loop
+        dsb sy
         "#,
         in(reg) cache_level,
         options(nostack)

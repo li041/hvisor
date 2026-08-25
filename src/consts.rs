@@ -28,9 +28,15 @@ use crate::{memory::addr::VirtAddr, platform::BOARD_NCPUS};
 use core::arch::global_asm;
 
 /// Size of the hypervisor heap.
+#[cfg(loongson_3a6000)]
+pub const HV_HEAP_SIZE: usize = 8 * 1024 * 1024; // 8 MiB
+#[cfg(not(loongson_3a6000))]
 pub const HV_HEAP_SIZE: usize = 1024 * 1024; // 1 MiB
 
-/// Size of the hypervisor memory pool used for dynamic allocation.
+/// Size of the hypervisor memory pool used for dynamic stage-2 page tables.
+#[cfg(loongson_3a6000)]
+pub const HV_MEM_POOL_SIZE: usize = 0x1000_0000; // 256 MiB
+#[cfg(not(loongson_3a6000))]
 pub const HV_MEM_POOL_SIZE: usize = 64 * 1024 * 1024; // 64 MiB
 
 /// Size of the per-CPU data area, including stack and CPU-local data.
@@ -88,6 +94,10 @@ pub fn hv_end() -> VirtAddr {
 pub const IPI_EVENT_CLEAR_INJECT_IRQ: usize = 4;
 pub const IPI_EVENT_UPDATE_HART_LINE: usize = 5;
 pub const IPI_EVENT_SEND_IPI: usize = 6;
+pub const IPI_EVENT_DWC_MSI_INJECT: usize = 9;
+/// ipi events for vcpu management
+pub const IPI_EVENT_VCPU_SUSPEND: usize = 7;
+pub const IPI_EVENT_VCPU_RESUME: usize = 8;
 
 extern "C" {
     /// Entry point of the hypervisor written in assembly.
