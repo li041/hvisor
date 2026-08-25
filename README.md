@@ -65,6 +65,7 @@ hvisor is a Type-1 bare-metal virtual machine monitor implemented in Rust, featu
 - [x] Rockchip RK3568
 - [x] Forlinx OK6254-C
 - [x] Phytium Pi
+- [x] Jetson Orin
 
 ### riscv64
 
@@ -72,6 +73,7 @@ hvisor is a Type-1 bare-metal virtual machine monitor implemented in Rust, featu
 - [x] Milk-V Megrez 
 - [x] Sifive Hifive Premier P550
 - [x] dp-1000
+- [x] Spacemit k3-com260
 - [ ] FPGA XiangShan(KunMingHu) on S2C Prodigy S7-19PS-2
 
 ### loongarch64
@@ -92,7 +94,8 @@ hvisor is a Type-1 bare-metal virtual machine monitor implemented in Rust, featu
 - [x] Zephyr AArch32
 - [x] RT-Thread
 - [x] Android
-- [ ] OpenHarmony
+- [x] OpenHarmony
+- [x] Asterinas
 
 ## Getting Started
 
@@ -103,22 +106,25 @@ Please refer to the hvisor documentation for quick start guides, build and run i
 - [CHANGELOG](./CHANGELOG.md)
 - Support for USB zoneU passthrough
 - Support for PCIe bus virtualization
+- Support for Android
+- Support for OpenHarmony
+- Support for Jetson Orin
+- Support for IOMMU virtualization (Intel VT-d / RISC-V virtual IOMMU)
+- Support for Clock Controller virtualization (virtio-scmi Clock protocol, ARM)
+- Support for NPU zoneU passthrough (sysoul_x3300-scmi)
 
 ### Planned
-- Support for OpenHarmony  
 - Support for ARMv9
 - Support for GICv4
 - Support for Cache Coloring
-- Support for SR-IOV
-- Support for NPU zoneU passthrough
 - Support for Nvidia GPU zoneU passthrough
+- Support for ARM SMMU virtualization
+- Support for Clock Controller virtualization on x86_64
+- Support for SR-IOV
 - Web Management tool
 - Device Tree configuration tool
-- Support for Nvidia Orin
 - Support for Nvidia Thor
 - Support for Raspberry Pi 5
-- Support for IOMMU virtualization
-- Support for Clock Controller virtualization
 - Support for pinctrl virtualization
 - Support for booting zoneU / zoneR without zone0
 
