@@ -101,6 +101,8 @@ hvisor is a Type-1 bare-metal virtual machine monitor implemented in Rust, featu
 
 Please refer to the hvisor documentation for quick start guides, build and run instructions for all supported platforms: [hvisor Documentation](https://hvisor.syswonder.org/)
 
+Before contributing, please read the [contribution guide](./CONTRIBUTING.md).
+
 ## Roadmap
 ### Completed
 - [CHANGELOG](./CHANGELOG.md)
